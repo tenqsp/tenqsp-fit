@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+.ipynb_checkpoints/
+spikes/**/results/*.npz
+
+# private notes (not part of the repository)
+docs/course/
+
+# hand-test outputs
+handtests/*.png
+handtests/*.json
+
+# executed tutorial notebooks (python docs/tutorials/build.py)
+docs/tutorials/*.ipynb
+
+# documentation site (mkdocs build)
+site/
+.cache/

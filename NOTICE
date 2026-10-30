@@ -1,0 +1,10 @@
+tenqsp-fit
+Copyright 2026 Yonsei University Health System
+
+tenqsp-fit was created by Dongwoo Chae, MD, PhD, Yonsei University College of Medicine,
+Seoul, Korea (ORCID 0000-0002-7675-3821), to fit TenQSP models to data and to report what
+the data can and cannot determine.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE). Under section 4(d) of that
+licence, redistributions of tenqsp-fit and works derived from it must keep the attribution
+notices in this file.
