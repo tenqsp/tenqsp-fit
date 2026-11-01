@@ -1,5 +1,54 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""tenqsp-fit: fitting TenQSP models to data, with diagnosis of what the data determine."""
+"""tenqsp-fit: fitting TenQSP models to data, with diagnosis of what the data determine.
+
+>>> import tenqsp_fit as tf
+>>> problem = tf.load("theoph_pop.tq")      # a TenQSP model followed by its fit part
+>>> print(problem.summary())
+"""
+
+from .distributions import (
+    Distribution,
+    ErrorModel,
+    additive,
+    beta,
+    combined,
+    exponential,
+    fix,
+    gamma,
+    logitnormal,
+    lognormal,
+    normal,
+    power,
+    proportional,
+    uniform,
+    weibull,
+)
+from .errors import FitTextError, ProblemError
+from .problem import Problem
+from .text import load
 
 __version__ = "0.0.1"
+
+__all__ = [
+    "__version__",
+    "Distribution",
+    "ErrorModel",
+    "FitTextError",
+    "Problem",
+    "ProblemError",
+    "additive",
+    "beta",
+    "combined",
+    "exponential",
+    "fix",
+    "gamma",
+    "load",
+    "logitnormal",
+    "lognormal",
+    "normal",
+    "power",
+    "proportional",
+    "uniform",
+    "weibull",
+]
