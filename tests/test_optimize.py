@@ -144,12 +144,18 @@ def test_live_plot_page(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
     monkeypatch.setattr(live, "REFRESH", 0.0)
     assert live.default_progress() == "text"  # not in a notebook
+    import matplotlib
+
+    backend = matplotlib.get_backend()
     p = problem(tmp_path, options="starts=2 seed=1")
     p._options["progress"] = "plot"
     r = tf.fit(p)
     out = capsys.readouterr().out
     url = re.search(r"live plot: (\S+)", out).group(1)
     assert opened == [url]
+    import matplotlib
+
+    assert matplotlib.get_backend() == backend  # the session's backend is left alone
     page = Path(url.removeprefix("file://")).read_text()
     assert "data:image/png;base64," in page
     assert "http-equiv" not in page  # the last page no longer refreshes
@@ -167,6 +173,35 @@ def test_plot_trace(tmp_path):
     assert len(shown) == 1 + len(r.names)
     assert [ax.get_title() for ax in shown[1:]] == list(r.names)
     assert len(shown[0].lines) == 2  # one line per start
+    # the trace starts at each start's values (step 0), and the -2LL axis shows all of it
+    first = r.trace[r.trace.iteration == 0].set_index("start")
+    assert list(first.index) == [1, 2]
+    np.testing.assert_allclose(first.loc[1, list(r.names)], r.x0, rtol=1e-12)
+    m2ll0 = float(tf.objective(r.problem)(np.asarray(r.x0)))
+    np.testing.assert_allclose(first.loc[1, "-2LL"], m2ll0, rtol=1e-9)
+    lo, hi = shown[0].get_ylim()
+    assert lo <= r.trace["-2LL"].min() and hi >= r.trace["-2LL"].max()
+
+
+def test_in_notebook_knows_positron(monkeypatch):
+    """Positron's console runs its own kernel app; its shell is a ZMQInteractiveShell
+    subclass, as Jupyter's is."""
+    import sys
+    import types
+
+    from tenqsp_fit import live
+
+    class ZMQInteractiveShell:
+        pass
+
+    class PositronShell(ZMQInteractiveShell):
+        pass
+
+    fake = types.SimpleNamespace(get_ipython=lambda: PositronShell())
+    monkeypatch.setitem(sys.modules, "IPython", fake)
+    assert live.in_notebook() and live.default_progress() == "plot"
+    fake.get_ipython = lambda: None  # IPython imported, but no kernel (a plain script)
+    assert not live.in_notebook()
 
 
 def test_progress_text_and_none(tmp_path, capsys):

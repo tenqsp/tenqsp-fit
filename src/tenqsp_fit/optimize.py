@@ -436,7 +436,7 @@ def fit_optimize(problem, obj, *, progress=None) -> Result:
         )
 
     run = run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
-                     "optimize", const, problem.name)  # fmt: skip
+                     "optimize", const, problem.name, obj)  # fmt: skip
     final = np.array([float(v) for v in ThreadPoolExecutor(len(U_start)).map(obj, list(run.X))])
     best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
     if run.status == "stopped":
@@ -482,9 +482,10 @@ class _Run:
 
 
 def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers, label,
-               const=0.0, problem_name="") -> _Run:  # fmt: skip
+               const=0.0, problem_name="", value=None) -> _Run:  # fmt: skip
     """Every start in its own thread (JAX runs them on separate cores), with the live text
-    and Ctrl-C keeping the work. ``step(u, state) -> (u, state, done, ok, f)``."""
+    and Ctrl-C keeping the work. ``step(u, state) -> (u, state, done, ok, f)``; ``value(x)``,
+    -2LL at a start, gives the trace its step 0."""
     t_start = time.perf_counter()
     n = len(U_start)
     m2ll = np.full(n, np.nan)
@@ -497,6 +498,8 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
 
     def run(j):
         u = jnp.asarray(U_start[j])
+        if value is not None:
+            trace.append((j + 1, 0, float(value(X[j])), *X[j]))
         state = init(u)
         if bool(term(u, state)):
             done[j] = True

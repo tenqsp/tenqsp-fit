@@ -367,6 +367,9 @@ def fit_laplace(problem, obj: Laplace, *, progress=None):
                 failed[j] += 1
                 return BAD_VALUE, np.zeros(p)
             warm["Z"] = Zh
+            if "first" not in warm:  # scipy starts at the start: the trace's step 0
+                warm["first"] = True
+                trace.append((j + 1, 0, v, *np.asarray(to_x(jnp.asarray(u), sc))))
             g = np.asarray(gradient(jnp.asarray(u), jnp.asarray(Zh)))
             if not np.all(np.isfinite(g)):
                 failed[j] += 1

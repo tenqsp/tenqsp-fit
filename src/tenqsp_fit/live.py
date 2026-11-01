@@ -27,7 +27,8 @@ NCOLS = 4
 
 
 def in_notebook() -> bool:
-    """True in a Jupyter-protocol kernel (Jupyter, Positron's console, VS Code)."""
+    """True in a Jupyter-protocol kernel (Jupyter, Positron's console, VS Code): its shell is
+    a ZMQInteractiveShell (Positron's is a subclass, with its own kernel app)."""
     ip = sys.modules.get("IPython")
     if ip is None:
         return False
@@ -35,36 +36,39 @@ def in_notebook() -> bool:
         shell = ip.get_ipython()
     except Exception:  # pragma: no cover
         return False
-    return shell is not None and "IPKernelApp" in getattr(shell, "config", {})
+    return any(c.__name__ == "ZMQInteractiveShell" for c in type(shell).__mro__)
 
 
 def default_progress() -> str:
     return "plot" if in_notebook() else "text"
 
 
-def _pyplot():
+def _matplotlib():
     try:
-        import matplotlib
-
-        if not in_notebook() and "matplotlib.pyplot" not in sys.modules:
-            matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        import matplotlib  # noqa: F401
     except ImportError:  # pragma: no cover
         raise ImportError(
             "plots need matplotlib: pip install matplotlib (or tenqsp-fit[plot])."
         ) from None
-    return plt
+
+
+def _figsize(names) -> tuple[float, float]:
+    n_panels = 1 + len(names)
+    ncols = min(NCOLS, n_panels)
+    return 3.1 * ncols, 2.3 * math.ceil(n_panels / ncols) + 0.4
 
 
 def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None):
     """The figure: -2LL against the step (top left), then one panel per quantity. One line
     per start, the best start (lowest -2LL so far) dark and thick, the others light."""
-    plt = _pyplot()
+    _matplotlib()
     n_panels = 1 + len(names)
     ncols = min(NCOLS, n_panels)
     nrows = math.ceil(n_panels / ncols)
-    if fig is None:
-        fig = plt.figure(figsize=(3.1 * ncols, 2.3 * nrows + 0.4))
+    if fig is None:  # the user's own figure, shown by their backend (Plots pane, inline)
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=_figsize(names))
     fig.clear()
     axes = fig.subplots(nrows, ncols, squeeze=False).ravel()
     for ax in axes[n_panels:]:
@@ -81,11 +85,8 @@ def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None):
             for ax, name in zip(axes[1:], names, strict=False):
                 ax.plot(d.iteration, d[name], **style)
         v = trace["-2LL"].to_numpy()
-        lo = float(np.nanmin(v))
-        # leave out each start's first steps, which can be far above the rest
-        later = trace[trace.iteration > trace.groupby("start").iteration.transform("min") + 1]
-        hi = float(np.nanpercentile(later["-2LL"], 95)) if len(later) else float(np.nanmax(v))
-        pad = max(hi - lo, 1e-3) * 0.08
+        lo, hi = float(np.nanmin(v)), float(np.nanmax(v))
+        pad = max(hi - lo, 1e-3) * 0.05
         axes[0].set_ylim(lo - pad, hi + pad)
         axes[0].set_title(f"-2LL (best {lo:.4f})", fontsize=9)
     else:
@@ -135,27 +136,27 @@ class LivePlot:
         trace = pd.DataFrame(sorted(trace_rows), columns=columns)
         clock = f"{int(seconds // 60)}:{int(seconds % 60):02d}"
         title = self._title(f"{status}, {clock}")
-        plt = _pyplot()
         if self.fig is None:
-            n_panels = 1 + len(self.names)
-            ncols = min(NCOLS, n_panels)
-            self.fig = plt.figure(figsize=(3.1 * ncols, 2.3 * math.ceil(n_panels / ncols) + 0.4))
+            # a figure of its own, outside pyplot: the live plot never touches the session's
+            # backend or its figures (switching the backend stops Positron's Plots pane)
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
+            from matplotlib.figure import Figure
+
+            self.fig = Figure(figsize=_figsize(self.names))
+            FigureCanvasAgg(self.fig)
         draw_trace(trace, self.names, title=title, fig=self.fig)
+        buf = io.BytesIO()
+        self.fig.savefig(buf, format="png", dpi=90)
+        png = buf.getvalue()
         if self.notebook:
-            from IPython.display import display
+            from IPython.display import Image, display
 
             if self.handle is None:
-                self.handle = display(self.fig, display_id=True)
+                self.handle = display(Image(data=png), display_id=True)
             else:
-                self.handle.update(self.fig)
-            if last:
-                plt.close(self.fig)
+                self.handle.update(Image(data=png))
         else:
-            buf = io.BytesIO()
-            self.fig.savefig(buf, format="png", dpi=90)
-            self._write_page(buf.getvalue(), title, final=last)
-            if last:
-                plt.close(self.fig)
+            self._write_page(png, title, final=last)
 
     def _write_page(self, png: bytes | None, title: str, final: bool):
         refresh = "" if final else f'<meta http-equiv="refresh" content="{REFRESH:g}">'
