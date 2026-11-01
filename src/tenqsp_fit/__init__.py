@@ -25,7 +25,9 @@ from .distributions import (
     weibull,
 )
 from .errors import FitTextError, ProblemError
+from .fit import fit
 from .likelihood import Objective, objective
+from .optimize import Result
 from .problem import Problem
 from .text import load
 from .units import Observations, Unit
@@ -41,11 +43,13 @@ __all__ = [
     "Observations",
     "Problem",
     "ProblemError",
+    "Result",
     "Unit",
     "additive",
     "beta",
     "combined",
     "exponential",
+    "fit",
     "fix",
     "gamma",
     "load",

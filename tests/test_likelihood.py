@@ -272,3 +272,57 @@ def test_a_parameter_without_a_value(data_file):
     p = make(data_file, fit, model=model)
     with pytest.raises(tf.ProblemError, match="the model gives no value to ka"):
         tf.objective(p)
+
+
+# ----------------------------------------------------------------------------- written
+SD = "sqrt(a^2 + (b*conc)^2)"
+COMBINED = f"-0.5*((DV - conc)/{SD})^2 - log({SD}) - 0.9189385332046727"  # 0.5 log(2 pi)
+
+
+def test_a_written_likelihood_equals_the_error_model(data_file):
+    written = make(
+        data_file,
+        f"observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07, a = 0.3, b = 0.2\n"
+        f"likelihood conc: {COMBINED}",
+    )
+    model = make(
+        data_file,
+        "observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07\n"
+        "error conc ~ combined(0.3, 0.2)",
+    )
+    ow, om = tf.objective(written), tf.objective(model)
+    assert ow.names == ("ka", "CL", "ke", "a", "b")
+    np.testing.assert_allclose(float(ow(ow.x0)), float(om(om.x0)), rtol=1e-12)
+    g = jax.grad(ow)(jnp.asarray(ow.x0))
+    np.testing.assert_allclose(g, jax.grad(om)(jnp.asarray(om.x0)), rtol=1e-8)
+    assert f"conc: log-density {COMBINED} (written)" in written.summary()
+    assert tf.Problem.from_text(written.to_text(model=True)) == written
+
+
+def test_a_likelihood_as_a_python_function(data_file):
+    p = make(
+        data_file,
+        "observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07, a = 0.3\n"
+        "error conc ~ additive(0.3)",
+    )
+    p._errors.clear()
+
+    def density(dv, f, v):
+        return -0.5 * ((dv - f) / v["a"]) ** 2 - jnp.log(v["a"]) - 0.5 * jnp.log(2 * jnp.pi)
+
+    p.likelihood("conc", density)
+    obj = tf.objective(p)
+    dv, f = predictions(obj.x0[:3])
+    np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, 0.3), rtol=1e-8)
+    assert "# likelihood conc: a Python function" in p.to_text()
+
+
+def test_written_likelihood_checks(data_file):
+    with pytest.raises(tf.ProblemError, match="give an error model or a likelihood, not both"):
+        fit = "observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07, s = 1\n"
+        make(
+            data_file, fit + "error conc ~ additive(0.3)\nlikelihood conc: -0.5*(DV - conc)^2/s"
+        ).check()
+    with pytest.raises(tf.ProblemError, match="likelihood conc: 'sd' is not an estimated"):
+        fit = "observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07\n"
+        make(data_file, fit + "likelihood conc: -0.5*((DV - conc)/sd)^2").check()

@@ -29,7 +29,8 @@ _FIT_LINE = re.compile(rf"fit(\s+({_NAME}))?")
 _AT_START = re.compile(rf"at\s+{_NAME}\s*=")
 _OPENERS, _CLOSERS = "([{", ")]}"
 KEYWORDS = (
-    "fit data unit doses observe ignore estimate fix correlate error censor prior method options"
+    "fit data unit doses observe ignore estimate fix correlate error likelihood censor prior "
+    "method options"
 ).split()
 
 
@@ -400,6 +401,16 @@ class _Reader:
         if any(isinstance(v, str) for v in values):
             raise _Problem(f"{name}: the arguments are numbers (or fix(number)).")
         self.p.error(lhs, make_error(name, values))
+
+    def st_likelihood(self, rest: str, st: _Statement) -> None:
+        parts = _split_at(rest, ":")
+        if parts is None:
+            raise _Problem(
+                "write likelihood conc: <log-density>, e.g. likelihood conc: "
+                "-0.5*((DV - conc)/s)^2 - log(s)."
+            )
+        lhs, density = parts
+        self.p.likelihood(lhs, density)
 
     def st_censor(self, rest: str, st: _Statement) -> None:
         parts = _split_at(rest, r"(?<![A-Za-z0-9_])below(?![A-Za-z0-9_])")

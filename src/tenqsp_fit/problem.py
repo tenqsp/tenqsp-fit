@@ -121,6 +121,12 @@ class _Error(_Decl):
 
 
 @dataclass
+class _Likelihood(_Decl):
+    lhs: str
+    density: object  # a formula (text), or a Python function (dv, prediction, values)
+
+
+@dataclass
 class _Censor(_Decl):
     lhs: str
     below: float | str
@@ -218,6 +224,7 @@ class Problem:
         self._correlations: list[_Correlate] = []
         self._defines: list[_Define] = []
         self._errors: list[_Error] = []
+        self._likelihoods: list[_Likelihood] = []
         self._censors: list[_Censor] = []
         self._priors: list[_Prior] = []
         self._method: _Method | None = None
@@ -464,6 +471,26 @@ class Problem:
             raise ValueError(f"error {lhs}: its error model is given twice.")
         self._errors.append(_Error(lhs, model))
 
+    def likelihood(self, observable: str, density) -> None:
+        """A link's log-density written out, in place of an error model (as NONMEM's
+        $ERROR with -2LL): ``p.likelihood("conc", "-0.5*((DV - conc)/(a + b*conc))^2 -
+        log(a + b*conc)")``. In the formula the observables are the model's predictions, DV
+        the measurement (on the link's scale), and the other names estimated or fixed
+        quantities (``estimate a = 0.1, b = 0.1``). Or a Python function of JAX arrays,
+        ``density(dv, prediction, values)`` with ``prediction`` the link's left side and
+        ``values`` the estimated and fixed quantities by name; a function is not written
+        by ``to_text``."""
+        lhs = self._lhs(observable, "likelihood")
+        if isinstance(density, str):
+            density = _formula_text(density, f"likelihood {lhs}: ")
+        elif not callable(density):
+            raise TypeError(
+                f"likelihood {lhs}: give a formula (text) or a Python function, not {density!r}."
+            )
+        if any(_key(e.lhs) == _key(lhs) for e in self._likelihoods):
+            raise ValueError(f"likelihood {lhs}: its likelihood is given twice.")
+        self._likelihoods.append(_Likelihood(lhs, density))
+
     def censor(self, observable: str, *, below, where: str | None = None) -> None:
         """Measurements below a limit of quantification, by the M3 likelihood. ``below`` is
         the limit (a number, or a column: ``below="LLOQ"``), on the link's scale. Which
@@ -588,6 +615,11 @@ class Problem:
             for _, v in d.dist.args:
                 if isinstance(v, str):
                     used |= set(tq.formula(v).names)
+        for lk in self._likelihoods:
+            if isinstance(lk.density, str):
+                used |= set(tq.formula(lk.density).names)
+            else:
+                used |= {d.name for d in self._params}  # a function may use any of them
         for d in self._params:
             if d.name not in m.params and d.name not in used:
                 add(
@@ -695,7 +727,25 @@ class Problem:
                             "If they are measured values, write the rule out: censor "
                             f"{c.lhs} where {x.column} < {_arg(c.below)} below {_arg(c.below)}.",
                         )
-        with_error = {_key(e.lhs) for e in self._errors}
+        written = {_key(e.lhs) for e in self._likelihoods}
+        for lk in self._likelihoods:
+            if _key(lk.lhs) not in linked:
+                add(lk, f"likelihood {lk.lhs}: {lk.lhs} is not linked to the data.")
+            if any(_key(e.lhs) == _key(lk.lhs) for e in self._errors):
+                add(lk, f"likelihood {lk.lhs}: give an error model or a likelihood, not both.")
+            if any(_key(c.lhs) == _key(lk.lhs) for c in self._censors):
+                add(
+                    lk,
+                    f"likelihood {lk.lhs}: a written likelihood with censoring is not "
+                    "supported; write the censored part into the formula instead.",
+                )
+            if isinstance(lk.density, str):
+                obs = set(tq.formula(lk.lhs).names)
+                known = {"DV"} | obs | fit_names | set(m.params)
+                for n in sorted(tq.formula(lk.density).names):
+                    if n not in known:
+                        add(lk, self._unknown_in_formula(n, f"likelihood {lk.lhs}", set()))
+        with_error = {_key(e.lhs) for e in self._errors} | written
         for x in links:
             if _key(x.lhs) not in with_error:
                 add(
@@ -748,6 +798,22 @@ class Problem:
         if not self.estimated():
             out.append("nothing is estimated; add an estimate line.")
         return out
+
+    def _starts(self) -> tuple[list[str], np.ndarray, list[tuple[float, float]]]:
+        """The estimated quantities of a problem without varying parameters, their starts and
+        bounds ((-inf, inf) when none is given)."""
+        names = self.estimated()
+        start, bounds = {}, {}
+        for d in self._params:
+            if isinstance(d, _Estimate) and d.dist is None:
+                start[d.name] = d.start
+                bounds[d.name] = d.bounds or (-np.inf, np.inf)
+        for e in self._errors:
+            for q, a in zip(e.model.quantities, e.model.args, strict=True):
+                if not isinstance(a, Fixed):
+                    start[f"{e.lhs}.{q}"] = float(a)
+        x0 = np.array([start[n] for n in names], dtype=float)
+        return names, x0, [bounds.get(n, (-np.inf, np.inf)) for n in names]
 
     def _covariates(self) -> list[str]:
         """Data columns the fit's formulas use (read once per unit)."""
@@ -1154,6 +1220,12 @@ class Problem:
                 f"{e.lhs} ~ {e.model}   ({ERROR_FORMS[e.model.name]}"
                 + (", f = prediction)" if "f" in ERROR_FORMS[e.model.name] else ")"),
             )
+        for i, lk in enumerate(self._likelihoods):
+            what = lk.density if isinstance(lk.density, str) else "a Python function"
+            row(
+                "errors" if i == 0 and not self._errors else "",
+                f"{lk.lhs}: log-density {what} (written)",
+            )
         for i, d in enumerate(self._varying()):
             row("varying" if i == 0 else "", f"{d.name} ~ {d.dist}")
         for i, c in enumerate(self._correlations):
@@ -1164,6 +1236,11 @@ class Problem:
             )
         est = self.estimated()
         row("estimated", f"{len(est)}: " + " ".join(est))
+        if self._method.name == "optimize" and not self._varying():
+            from .optimize import scale_text, scales
+
+            names, x0, bounds = self._starts()
+            row("scales", scale_text(names, scales(names, x0, bounds)))
         fixed = [f"{d.name}={_num(d.value)}" for d in self._params if isinstance(d, _Fix)]
         fixed += [
             f"{d.name}.{k}={_num(v.value)}"
@@ -1271,6 +1348,11 @@ class Problem:
             lines.append(f"{d.name} = {d.formula}")
         for e in self._errors:
             lines.append(f"error {e.lhs} ~ {e.model}")
+        for lk in self._likelihoods:
+            if isinstance(lk.density, str):
+                lines.append(f"likelihood {lk.lhs}: {lk.density}")
+            else:
+                lines.append(f"# likelihood {lk.lhs}: a Python function (not written as text)")
         for c in self._censors:
             w = f" where {c.where}" if c.where else ""
             lines.append(f"censor {c.lhs}{w} below {_arg(c.below)}")
@@ -1314,6 +1396,7 @@ class Problem:
             self._correlations,
             self._defines,
             self._errors,
+            self._likelihoods,
             self._censors,
             self._priors,
             self._method,

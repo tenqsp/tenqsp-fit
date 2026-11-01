@@ -83,14 +83,8 @@ class Objective:
         params = [d for d in problem._params if isinstance(d, _Fix) or d.dist is None]
         fixed = {d.name: d.value for d in params if isinstance(d, _Fix)}
         starts = {d.name: d.start for d in params if isinstance(d, _Estimate)}
-        self.x0 = np.array([self._start(n, starts, problem) for n in self.names])
-        self.bounds = tuple(
-            next(
-                (d.bounds for d in params if isinstance(d, _Estimate) and d.name == n and d.bounds),
-                (-np.inf, np.inf),
-            )
-            for n in self.names
-        )
+        _, self.x0, bounds = problem._starts()
+        self.bounds = tuple(bounds)
         defined = {d.name: d.formula for d in problem._defines}
         wrt = [n for n in m.params if (n in starts) or (n in defined)]
         missing = [
@@ -146,6 +140,11 @@ class Objective:
 
         # ---- links: predictions at the measurements, data, censoring, error model
         errors = {_key(e.lhs): e.model for e in problem._errors}
+        written = {_key(w.lhs): w.density for w in problem._likelihoods}
+        self.written = bool(written)
+        self._fixed = {k: float(v) for k, v in fixed.items()}
+        self._base = {k: float(v) for k, v in base.items()}
+        self._index = index
         links = []
         for lhs, _, _ in problem._plan().links:
             f = tq.formula(lhs)
@@ -171,23 +170,37 @@ class Objective:
                     cens[i, :k] = o.censored
             censored = valid & cens
             dv = np.where(censored, 0.0, dv)  # a censored value is not read (NaN for text)
-            model = errors[_key(lhs)]
-            sd_args = [
-                ("const", float(a.value)) if isinstance(a, Fixed) else ("x", index[f"{lhs}.{q}"])
-                for q, a in zip(model.quantities, model.args, strict=True)
-            ]
+            density = written.get(_key(lhs))
+            model = errors.get(_key(lhs))
+            sd_args = (
+                []
+                if model is None
+                else [
+                    ("const", float(a.value))
+                    if isinstance(a, Fixed)
+                    else ("x", index[f"{lhs}.{q}"])
+                    for q, a in zip(model.quantities, model.args, strict=True)
+                ]
+            )
+            dens = None
+            if isinstance(density, str):
+                df_ = tq.formula(density)
+                dens = ("formula", df_.jax(list(df_.names)), df_.names)
+            elif density is not None:
+                dens = ("function", density, ())
             links.append(
                 dict(
                     lhs=lhs,
                     fn=f.jax(names),
                     names=names,
-                    transformed=transformed,
+                    transformed=transformed and dens is None,
+                    density=dens,
                     idx=jnp.asarray(idx),
                     dv=jnp.asarray(dv),
                     obs=jnp.asarray(valid & ~censored),
                     cens=jnp.asarray(censored),
                     limit=jnp.asarray(np.where(censored, limit, 0.0)),
-                    error=model.name,
+                    error=None if model is None else model.name,
                     sd_args=sd_args,
                     n=int(valid.sum()),
                     n_censored=int(censored.sum()),
@@ -198,21 +211,13 @@ class Objective:
         self.n_censored = sum(lk["n_censored"] for lk in links)
         self._jit = jax.jit(self._minus2ll)
 
-    @staticmethod
-    def _start(name, starts, problem):
-        if name in starts:
-            return starts[name]
-        for e in problem._errors:  # an error model's quantity: lhs.additive, ...
-            for q, a in zip(e.model.quantities, e.model.args, strict=True):
-                if f"{e.lhs}.{q}" == name:
-                    return float(a)
-        raise AssertionError(name)  # pragma: no cover - estimated() lists only these
-
     # ------------------------------------------------------------------ the function
     def predictions(self, x) -> dict:
         """Each link's prediction at its measurements: ``{lhs: (units, measurements)}``, on
         the link's scale (0 where a unit has fewer measurements)."""
-        out = self._fs(self._model_params(x))
+        return self._predictions(x, self._fs(self._model_params(x)))
+
+    def _predictions(self, x, out) -> dict:
         result = {}
         for lk in self._links:
             vals = [out[n] for n in lk["names"]]
@@ -234,20 +239,67 @@ class Objective:
             return jnp.sqrt(a[0] ** 2 + (a[1] * g) ** 2)
         return a[0] * g ** a[1]  # power
 
+    def _values(self, x) -> dict:
+        """Every estimated and fixed quantity and model parameter by name (for a written
+        likelihood)."""
+        return {**self._base, **self._fixed, **{n: x[i] for n, i in self._index.items()}}
+
     def terms(self, x) -> dict:
         """Each measurement's contribution to -2 log-likelihood: ``{lhs: (units,
         measurements)}`` (0 for padding)."""
         x = jnp.asarray(x, dtype=jnp.float64)
-        preds = self.predictions(x)
+        sim = self._fs(self._model_params(x))
+        preds = self._predictions(x, sim)
         out = {}
+        mask = jnp.asarray(self._fs.mask)
         for lk in self._links:
             f = preds[lk["lhs"]]
+            if lk["density"] is not None:
+                kind, fn, names = lk["density"]
+                values = self._values(x)
+                if kind == "formula":
+                    at = {
+                        n: jnp.take_along_axis(jnp.where(mask, sim[n], 0.0), lk["idx"], axis=1)
+                        for n in lk["names"]
+                    }
+                    args = [
+                        lk["dv"] if n == "DV" else at[n] if n in at else values[n] for n in names
+                    ]
+                    logd = fn(*args)
+                else:
+                    logd = fn(lk["dv"], f, values)
+                out[lk["lhs"]] = jnp.where(lk["obs"], -2.0 * logd, 0.0)
+                continue
             sd = self._sd(lk, x, f)
             z = (lk["dv"] - f) / sd
             normal = z * z + 2.0 * jnp.log(sd) + _LOG_2PI
             m3 = -2.0 * norm.logcdf((lk["limit"] - f) / sd)
             out[lk["lhs"]] = jnp.where(lk["obs"], normal, 0.0) + jnp.where(lk["cens"], m3, 0.0)
         return out
+
+    @property
+    def error_estimated(self) -> bool:
+        """Whether an error model's quantities are estimated, or a likelihood is written
+        (then -2LL is not a sum of squares)."""
+        return any(kind == "x" for lk in self._links for kind, _ in lk["sd_args"]) or any(
+            lk["density"] is not None for lk in self._links
+        )
+
+    def _residuals(self, x):
+        """-2LL as a sum of squares, up to a constant of the data, when the error model is
+        fixed: ``(DV - f)/sd`` per measured value, ``sqrt(-2 log Phi(...))`` per censored one.
+        Flat, padding 0."""
+        x = jnp.asarray(x, dtype=jnp.float64)
+        preds = self.predictions(x)
+        parts = []
+        for lk in self._links:
+            f = preds[lk["lhs"]]
+            sd = self._sd(lk, x, f)
+            z = jnp.where(lk["obs"], (lk["dv"] - f) / sd, 0.0)
+            m3 = -2.0 * norm.logcdf((lk["limit"] - f) / sd)
+            m3 = jnp.where(lk["cens"], jnp.sqrt(jnp.maximum(m3, 1e-300)), 0.0)
+            parts += [z.ravel(), m3.ravel()]
+        return jnp.concatenate(parts)
 
     def _minus2ll(self, x):
         return sum(jnp.sum(t) for t in self.terms(x).values())
