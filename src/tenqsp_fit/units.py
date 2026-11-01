@@ -26,24 +26,38 @@ _DOSE_COLUMNS = ("TIME", "AMT", "RATE", "DUR", "ADDL", "II", "EVID", "MDV", "SS"
 class Observations:
     """The measurements of one link in one unit: ``times``, ``values``, the data ``rows``
     (counted from 1 after the header) and, for a censored link, the limit of each
-    measurement (``below``; None when the link is not censored)."""
+    measurement (``below``) and which measurements are censored (``censored``; both None when
+    the link is not censored). A censored measurement's value is not read (NaN for text)."""
 
     link: str
     times: np.ndarray
     values: np.ndarray
     rows: np.ndarray
     below: np.ndarray | None = None
+    censored: np.ndarray | None = None
 
     def __eq__(self, other) -> bool:  # the same data; row numbers aside
         if not isinstance(other, Observations):
             return NotImplemented
         same_below = (self.below is None) == (other.below is None) and (
-            self.below is None or np.array_equal(self.below, other.below, equal_nan=True)
+            self.below is None
+            or (
+                np.array_equal(self.below, other.below, equal_nan=True)
+                and np.array_equal(self.censored, other.censored)
+            )
         )
         return (
             self.link == other.link
             and np.array_equal(self.times, other.times)
-            and np.array_equal(self.values, other.values, equal_nan=True)
+            and np.array_equal(
+                np.where(self.censored, np.nan, self.values)
+                if self.censored is not None
+                else self.values,
+                np.where(other.censored, np.nan, other.values)
+                if other.censored is not None
+                else other.values,
+                equal_nan=True,
+            )
             and same_below
         )
 
@@ -117,34 +131,69 @@ def _have(idx) -> str:
     return "has" if len(idx) == 1 else "have"
 
 
-def link_rows(df: pd.DataFrame, column: str, where: str | None) -> np.ndarray:
+def link_rows(
+    df: pd.DataFrame, column: str, where: str | None, censor_where: str | None = None
+) -> np.ndarray:
     """The rows a link (or an ``ignore`` line) reads: measurements in ``column`` (for DV, the
-    observation records), picked by ``where``."""
+    observation records), picked by ``where``. Rows its censor line's condition marks
+    (``censor conc where CENS == 1 ...``) are measurements too, whatever their DV."""
     if column == "DV":
         rows = D.observation_rows(df)
     else:  # a wide table: a column per observable
         rows = df[column].notna().to_numpy() & ~D.dose_rows(df)
+    if censor_where is not None:
+        rows = rows | (D.evaluate_condition(censor_where, df) & ~D.dose_rows(df))
     if where is not None:
         rows = rows & D.evaluate_condition(where, df)
     return rows
 
 
-def _num_column(df, col, add, origin, what):
-    """A column as numbers; text that is not a number is a problem with its rows."""
+def censored_rows(df: pd.DataFrame, column: str, below, where: str | None) -> np.ndarray:
+    """The rows a censor line marks: those meeting its condition when it has one (a flag,
+    ``CENS == 1``, or a text, ``DV == "BLQ"``); otherwise those whose value is strictly below
+    the limit (a number or a column)."""
+    if where is not None:
+        return D.evaluate_condition(where, df)
+    dv = pd.to_numeric(df[column], errors="coerce").to_numpy(float)
+    lim = (
+        pd.to_numeric(df[below], errors="coerce").to_numpy(float)
+        if isinstance(below, str)
+        else np.full(len(df), float(below))
+    )
+    with np.errstate(invalid="ignore"):
+        return dv < lim
+
+
+def _num_column(df, col, add, origin, what, exempt=None):
+    """A column as numbers; text that is not a number is a problem with its rows (except the
+    ``exempt`` rows: those a censor line marks)."""
     values = pd.to_numeric(df[col], errors="coerce")
-    bad = np.flatnonzero(values.isna().to_numpy() & df[col].notna().to_numpy())
+    bad = values.isna().to_numpy() & df[col].notna().to_numpy()
+    if exempt is not None:
+        bad &= ~exempt
+    bad = np.flatnonzero(bad)
     if len(bad):
+        hint = "."
+        if col == "DV":
+            words = ", ".join(f'"{w}"' for w in pd.unique(df[col].iloc[bad])[:3])
+            hint = (
+                f": {words}. If a text marks values below the limit of quantification, say "
+                'so: censor <observable> where DV == "BLQ" below <limit>.'
+            )
         add(
             origin,
-            f"{col}: {rows_text(bad)} {'is' if len(bad) == 1 else 'are'} not numbers ({what}).",
+            f"{col}: {rows_text(bad)} {'is' if len(bad) == 1 else 'are'} not numbers "
+            f"({what}){hint}",
         )
     return values
 
 
 # ----------------------------------------------------------------------------- row checks
-def row_problems(df: pd.DataFrame, unit: str | None, add, origin) -> None:
-    """Pre-flight checks of the rows: each problem names its rows and what to change."""
+def row_problems(df: pd.DataFrame, unit: str | None, add, origin, censored=None) -> None:
+    """Pre-flight checks of the rows: each problem names its rows and what to change.
+    ``censored``: rows a censor line's condition marks (their DV is not read)."""
     cols = set(df.columns)
+    exempt = censored if censored is not None else np.zeros(len(df), bool)
     obs, dose = D.observation_rows(df), D.dose_rows(df)
     used = obs | dose
     if "TIME" not in cols:
@@ -171,7 +220,9 @@ def row_problems(df: pd.DataFrame, unit: str | None, add, origin) -> None:
             add(origin, f"{unit} (the unit) is missing on {rows_text(no_unit)}.")
     for c in ("AMT", "DV", "EVID", "MDV", "RATE", "SS", "ADDL", "II"):
         if c in cols:
-            _num_column(df, c, add, origin, "a NONMEM column holds numbers")
+            _num_column(
+                df, c, add, origin, "a NONMEM column holds numbers", exempt if c == "DV" else None
+            )
     if "EVID" in cols:
         evid = pd.to_numeric(df["EVID"], errors="coerce")
         bad = np.flatnonzero(~evid.isin([0, 1, 2, 3, 4]).to_numpy() & df["EVID"].notna())
@@ -207,7 +258,7 @@ def row_problems(df: pd.DataFrame, unit: str | None, add, origin) -> None:
                     "set EVID 2 for a row that is not a measurement.",
                 )
         if "DV" in cols:
-            r = np.flatnonzero(((evid == 0) & df["DV"].isna()).to_numpy())
+            r = np.flatnonzero(((evid == 0) & df["DV"].isna()).to_numpy() & ~exempt)
             if len(r):
                 add(
                     origin,
@@ -289,7 +340,7 @@ class Plan:
     doses: object  # the _Doses declaration, or None
     links: list  # (lhs, column, where) of each observe line
     ignored: list  # (column, where) of each ignore line
-    censors: dict  # lhs key -> limit (a number or a column)
+    censors: dict  # lhs key -> (limit: a number or a column, condition or None)
     covariates: list  # data columns read once per unit
     reads: dict  # observable -> compartments it reads directly
 
@@ -302,16 +353,19 @@ def build(df: pd.DataFrame, plan: Plan, add, origin_of) -> list[Unit]:
     order = list(pd.unique(keys[keys.notna()]))
     time = pd.to_numeric(df["TIME"], errors="coerce").to_numpy(float)
     regimens = _regimens(df, keys, order, plan, add, origin_of)
-    link_masks = [(lhs, col, link_rows(df, col, where)) for lhs, col, where in plan.links]
+    link_masks = []
+    for lhs, col, where in plan.links:
+        limit, cwhere = plan.censors.get("".join(lhs.split()), (None, None))
+        cens = censored_rows(df, col, limit, cwhere) if limit is not None else None
+        link_masks.append((lhs, col, link_rows(df, col, where, cwhere), limit, cens))
     units = []
     for k in order:
         in_unit = (keys == k).to_numpy()
         observations = {}
-        for lhs, col, mask in link_masks:
+        for lhs, col, mask, limit, cens in link_masks:
             rows = np.flatnonzero(mask & in_unit)
             if not len(rows):
                 continue
-            limit = plan.censors.get("".join(lhs.split()))
             below = None
             if limit is not None:
                 below = (
@@ -327,6 +381,7 @@ def build(df: pd.DataFrame, plan: Plan, add, origin_of) -> list[Unit]:
                 pd.to_numeric(df[col], errors="coerce").to_numpy(float)[rows],
                 rows + 1,
                 None if below is None else below[sort],
+                None if cens is None else cens[rows],
             )
         if not observations:
             continue  # no linked measurement: nothing to fit (reported in the summary)

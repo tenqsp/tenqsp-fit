@@ -145,7 +145,13 @@ def _walk(node, df, text):
                 raise ValueError(f"in '{text}': compare with ==, !=, <, <=, > or >=.")
             r = _value(right, df, text)
             if df is not None:
-                res = _CMP[type(op)](left, r)
+                try:
+                    res = _CMP[type(op)](left, r)
+                except TypeError:
+                    raise ValueError(
+                        f"in '{text}': a column holds text, or text and numbers; compare it "
+                        'with a quoted text (DV == "BLQ").'
+                    ) from None
                 out = res if out is None else out & res
             left = r
         return out

@@ -10,7 +10,7 @@ measurement adds
 
 - ``((DV - f)/sd)^2 + 2 log(sd) + log(2 pi)``, with ``sd`` from the error model (``f`` the
   prediction on the link's scale), or
-- for a censored link and ``DV`` at or below the limit (M3, Beal 2001):
+- for a censored measurement (M3, Beal 2001; which are censored: ``Problem.censor``):
   ``-2 log Phi((limit - f)/sd)``, the probability that the value is below the limit.
 
 So -2LL = sum over measured values of ``((DV - f)/sd)^2 + 2 log(sd)``, plus
@@ -157,6 +157,7 @@ class Objective:
             dv = np.zeros((n_units, n_max))
             valid = np.zeros((n_units, n_max), bool)
             limit = np.full((n_units, n_max), np.nan)
+            cens = np.zeros((n_units, n_max), bool)
             for i, u in enumerate(units):
                 o = u.observations.get(lhs)
                 if o is None:
@@ -167,7 +168,9 @@ class Objective:
                 valid[i, :k] = True
                 if o.below is not None:
                     limit[i, :k] = o.below
-            censored = valid & np.isfinite(limit) & (dv <= np.where(np.isfinite(limit), limit, 0))
+                    cens[i, :k] = o.censored
+            censored = valid & cens
+            dv = np.where(censored, 0.0, dv)  # a censored value is not read (NaN for text)
             model = errors[_key(lhs)]
             sd_args = [
                 ("const", float(a.value)) if isinstance(a, Fixed) else ("x", index[f"{lhs}.{q}"])

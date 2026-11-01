@@ -124,6 +124,7 @@ class _Error(_Decl):
 class _Censor(_Decl):
     lhs: str
     below: float | str
+    where: str | None = None
 
 
 @dataclass
@@ -463,17 +464,21 @@ class Problem:
             raise ValueError(f"error {lhs}: its error model is given twice.")
         self._errors.append(_Error(lhs, model))
 
-    def censor(self, observable: str, *, below) -> None:
-        """Measurements below a limit, by the M3 likelihood: ``p.censor("conc",
-        below="LLOQ")`` (a column) or ``below=0.1`` (a number)."""
+    def censor(self, observable: str, *, below, where: str | None = None) -> None:
+        """Measurements below a limit of quantification, by the M3 likelihood. ``below`` is
+        the limit (a number, or a column: ``below="LLOQ"``), on the link's scale. Which
+        measurements are censored: those meeting ``where`` when it is given (a flag column,
+        ``where="CENS == 1"``, or a text in DV, ``where='DV == "BLQ"'``; their DV is not
+        read); otherwise those whose value is strictly below the limit."""
         lhs = self._lhs(observable, "censor")
         if isinstance(below, str):
             below = self._column_name(below, f"censor {lhs}")
         else:
             below = _as_float(below, f"censor {lhs}: below")
+        where = D.check_condition(where) if where is not None else None
         if any(_key(c.lhs) == _key(lhs) for c in self._censors):
             raise ValueError(f"censor {lhs}: its limit is given twice.")
-        self._censors.append(_Censor(lhs, below))
+        self._censors.append(_Censor(lhs, below, where))
 
     def prior(self, name: str, dist: Distribution) -> None:
         """A prior on an estimated quantity: ``p.prior("ke", tf.lognormal(median=0.08,
@@ -661,6 +666,35 @@ class Problem:
                     f"censor {c.lhs}: the data have no column '{c.below}'."
                     f"{nearest(c.below, columns)}",
                 )
+            elif df is not None and c.where is not None:
+                try:
+                    D.evaluate_condition(c.where, df)
+                except ValueError as e:
+                    add(c, f"censor {c.lhs}: {e}")
+            elif df is not None:  # no condition: values equal to the limit are suspect
+                x = linked[_key(c.lhs)]
+                if x.column in columns:
+                    try:
+                        rows = U.link_rows(df, x.column, x.where)
+                    except ValueError:
+                        rows = np.zeros(len(df), bool)
+                    dv = pd.to_numeric(df[x.column], errors="coerce").to_numpy(float)
+                    lim = (
+                        pd.to_numeric(df[c.below], errors="coerce").to_numpy(float)
+                        if isinstance(c.below, str)
+                        else np.full(len(df), c.below)
+                    )
+                    equal = np.flatnonzero(rows & (dv == lim))
+                    if len(equal) >= 2:
+                        add(
+                            c,
+                            f"censor {c.lhs}: {len(equal)} measurements equal the limit exactly "
+                            f"({U.rows_text(equal)}). If they are values below the limit written "
+                            "as the limit, say how to tell them: censor "
+                            f"{c.lhs} where CENS == 1 below {_arg(c.below)} (a flag column). "
+                            "If they are measured values, write the rule out: censor "
+                            f"{c.lhs} where {x.column} < {_arg(c.below)} below {_arg(c.below)}.",
+                        )
         with_error = {_key(e.lhs) for e in self._errors}
         for x in links:
             if _key(x.lhs) not in with_error:
@@ -671,7 +705,10 @@ class Problem:
                 )
         if df is not None:
             before = len(out)
-            U.row_problems(df, self._unit if self._unit in columns else None, add, self._data)
+            U.row_problems(
+                df, self._unit if self._unit in columns else None, add, self._data,
+                self._censor_marked(df),
+            )  # fmt: skip
             unit = self._unit if self._unit in columns else None
             if self._doses is not None and self._doses.column is not None:
                 U.constant_problems(df, unit, self._doses.column, "the dose", add, self._doses)
@@ -724,13 +761,32 @@ class Problem:
         names = {n for t in texts for n in tq.formula(t).names}
         return sorted(n for n in names if n in columns and n not in taken)
 
+    def _censor_marked(self, df) -> np.ndarray:
+        """Rows a censor line's condition marks (their DV is not read)."""
+        out = np.zeros(len(df), bool)
+        for c in self._censors:
+            if c.where is not None:
+                try:
+                    out |= D.evaluate_condition(c.where, df)
+                except ValueError:
+                    pass  # reported by the censor checks
+        return out
+
+    def _censor_of(self, lhs):
+        return next((c for c in self._censors if _key(c.lhs) == _key(lhs)), None)
+
+    def _rows_of(self, x, df) -> np.ndarray:
+        """The rows a link reads (with its censor line's marked rows)."""
+        c = self._censor_of(x.lhs) if isinstance(x, _Observe) else None
+        return U.link_rows(df, x.column, x.where, c.where if c else None)
+
     def _plan(self) -> U.Plan:
         return U.Plan(
             unit=self._unit,
             doses=self._doses,
             links=[(x.lhs, x.column, x.where) for x in self._links if isinstance(x, _Observe)],
             ignored=[(x.column, x.where) for x in self._links if isinstance(x, _Ignore)],
-            censors={_key(c.lhs): c.below for c in self._censors},
+            censors={_key(c.lhs): (c.below, c.where) for c in self._censors},
             covariates=self._covariates(),
             reads={o: self._m.reads(o) for o in self._m.observables},
         )
@@ -824,8 +880,9 @@ class Problem:
         obs, dose = D.observation_rows(df), D.dose_rows(df)
         units = self.units()
         linked = np.zeros(len(df), bool)
-        for _lhs, col, where in self._plan().links:
-            linked |= U.link_rows(df, col, where)
+        for x in self._links:
+            if isinstance(x, _Observe):
+                linked |= self._rows_of(x, df)
         left_out = []
         for x in self._links:
             if isinstance(x, _Ignore):
@@ -1050,31 +1107,21 @@ class Problem:
                 (f"{unit}: {n_units} units" if unit else "none named: all rows are one unit")
                 + (f", {empty} without linked measurements (not fitted)" if empty else ""),
             )
-            obs = D.observation_rows(df)
             for x in self._links:
-                rows = (
-                    obs
-                    if x.column == "DV"
-                    else (df[x.column].notna().to_numpy() & ~D.dose_rows(df))
-                )
-                if x.where:
-                    rows = rows & D.evaluate_condition(x.where, df)
+                rows = self._rows_of(x, df)
                 n = f"{int(rows.sum())} rows" + (
                     f", {df.loc[rows, unit].nunique()} units" if unit else ""
                 )
                 where = f"where {x.where}" if x.where else "(all rows)"
                 if isinstance(x, _Observe):
-                    cens = next((c for c in self._censors if _key(c.lhs) == _key(x.lhs)), None)
+                    cens = self._censor_of(x.lhs)
                     extra = ""
                     if cens:
-                        dv = pd.to_numeric(df[x.column], errors="coerce")
-                        lim = (
-                            pd.to_numeric(df[cens.below], errors="coerce")
-                            if isinstance(cens.below, str)
-                            else cens.below
+                        k = int(
+                            (rows & U.censored_rows(df, x.column, cens.below, cens.where)).sum()
                         )
-                        k = int((rows & (dv <= lim).to_numpy()).sum())
-                        extra = f"   censored below {_arg(cens.below)} (M3): {k} at or below"
+                        how = f"where {cens.where}" if cens.where else "below the limit"
+                        extra = f"   censored (M3, limit {_arg(cens.below)}): {k} rows, {how}"
                     row(
                         "links" if x is self._links[0] else "",
                         f"{x.lhs} <- {x.column} {where}   {n}{extra}",
@@ -1225,7 +1272,8 @@ class Problem:
         for e in self._errors:
             lines.append(f"error {e.lhs} ~ {e.model}")
         for c in self._censors:
-            lines.append(f"censor {c.lhs} below {_arg(c.below)}")
+            w = f" where {c.where}" if c.where else ""
+            lines.append(f"censor {c.lhs}{w} below {_arg(c.below)}")
         for p in self._priors:
             lines.append(f"prior {p.name} ~ {p.dist}")
         if self._method is not None or self._options:

@@ -142,26 +142,76 @@ def test_covariates_by_a_formula_of_the_fit(data_file):
     np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, 0.3), rtol=1e-8)
 
 
-def test_m3_for_measurements_at_or_below_the_limit(tmp_path):
-    df = table()
-    df["LLOQ"] = 2.0
-    low = df.DV <= 2.0
-    df.loc[low, "DV"] = 2.0  # BLQ rows are written as the limit
-    assert low.sum() >= 2
+def m3_problem(tmp_path, df, censor, column_map=""):
     f_ = tmp_path / "pk.csv"
     df.to_csv(f_, index=False)
-    p = tf.Problem.from_text(
-        PK + f'fit pk\ndata "{f_}"\nunit ID\ndoses Dose at t=0 into depot\nobserve conc = DV\n'
-        "censor conc below LLOQ\nestimate ka = 1.4, CL = 0.05, ke = 0.07\n"
+    return tf.Problem.from_text(
+        PK + f'fit pk\ndata "{f_}"{column_map}\nunit ID\ndoses Dose at t=0 into depot\n'
+        f"observe conc = DV\n{censor}\nestimate ka = 1.4, CL = 0.05, ke = 0.07\n"
         "error conc ~ additive(0.3)\nmethod optimize\n" + TIGHT
     )
+
+
+def m3_want(obj, c):
+    dv, f = predictions(obj.x0[:3])
+    return hand_normal(dv[~c], f[~c], 0.3) - 2 * np.sum(norm.logcdf((2.0 - f[c]) / 0.3))
+
+
+@pytest.mark.parametrize(
+    "how, censor",
+    [
+        ("flag", "censor conc where CENS == 1 below LLOQ"),
+        ("text", 'censor conc where DV == "BLQ" below 2'),
+        ("below", "censor conc below 2"),
+    ],
+)
+def test_m3_flag_text_or_below_the_limit(tmp_path, how, censor):
+    df = table().assign(LLOQ=2.0, CENS=0)
+    low = (df.DV < 2.0).to_numpy()
+    assert low.sum() >= 2
+    df["CENS"] = low.astype(int)
+    if how == "flag":
+        df["DV"] = np.where(low, 2.0, df.DV)  # BLQ written as the limit, with a flag
+    elif how == "text":
+        df["DV"] = np.where(low, "BLQ", df.DV.astype(str))
+    p = m3_problem(tmp_path, df, censor)
     obj = tf.objective(p)
     assert obj.n_censored == low.sum()
-    dv, f = predictions(obj.x0[:3])
-    c = low.to_numpy()
-    want = hand_normal(dv[~c], f[~c], 0.3) - 2 * np.sum(norm.logcdf((2.0 - f[c]) / 0.3))
-    np.testing.assert_allclose(float(obj(obj.x0)), want, rtol=1e-8)
-    assert f"censored below LLOQ (M3): {low.sum()} at or below" in p.summary()
+    np.testing.assert_allclose(float(obj(obj.x0)), m3_want(obj, low), rtol=1e-8)
+    s = p.summary()
+    assert f"censored (M3, limit {'LLOQ' if how == 'flag' else '2'}): {low.sum()} rows" in s
+    assert tf.Problem.from_text(p.to_text(model=True)) == p
+
+
+def test_flagged_rows_may_have_no_dv(tmp_path):
+    """A BLQ row with DV missing ("."): read through the flag, with or without EVID."""
+    df = table().assign(CENS=0)
+    low = (df.DV < 2.0).to_numpy()
+    df["CENS"] = low.astype(int)
+    df["DV"] = np.where(low, np.nan, df.DV)
+    obj = tf.objective(m3_problem(tmp_path, df, "censor conc where CENS == 1 below 2"))
+    assert obj.n_censored == low.sum()
+    np.testing.assert_allclose(float(obj(obj.x0)), m3_want(obj, low), rtol=1e-8)
+
+
+def test_values_equal_to_the_limit_need_a_rule(tmp_path):
+    df = table()
+    low = (df.DV < 2.0).to_numpy()
+    df["DV"] = np.where(low, 2.0, df.DV)  # BLQ written as the limit, no flag
+    with pytest.raises(tf.ProblemError, match="measurements equal the limit exactly"):
+        m3_problem(tmp_path, df, "censor conc below 2").check()
+    p = m3_problem(tmp_path, df, "censor conc where DV < 2 below 2")  # measured values
+    assert tf.objective(p).n_censored == 0
+
+
+def test_text_in_dv_without_a_censor_rule(tmp_path):
+    df = table()
+    df["DV"] = df.DV.astype(str)
+    df.loc[3, "DV"] = "BLQ"
+    with pytest.raises(tf.ProblemError, match=r'DV: row 4 is not numbers .*: "BLQ"\. If a text'):
+        m3_problem(tmp_path, df, "censor conc below 2").check()
+    with pytest.raises(tf.ProblemError, match="compare it with a quoted text"):
+        m3_problem(tmp_path, df, "censor conc where DV < 2 below 2").check()
 
 
 def test_log_scale_link_and_the_floor_near_zero(tmp_path):

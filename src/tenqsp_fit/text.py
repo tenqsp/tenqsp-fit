@@ -404,10 +404,17 @@ class _Reader:
     def st_censor(self, rest: str, st: _Statement) -> None:
         parts = _split_at(rest, r"(?<![A-Za-z0-9_])below(?![A-Za-z0-9_])")
         if parts is None:
-            raise _Problem("write censor conc below LLOQ (a column) or below 0.1 (a number).")
+            raise _Problem(
+                "write censor conc below LLOQ (a column) or below 0.1 (a number); with a flag: "
+                "censor conc where CENS == 1 below LLOQ."
+            )
         lhs, below = parts
         below = below if re.fullmatch(_NAME, below) else _number(below, "censor: below")
-        self.p.censor(lhs, below=below)
+        where = None
+        split = _split_at(lhs, r"(?<![A-Za-z0-9_])where(?![A-Za-z0-9_])")
+        if split is not None:
+            lhs, where = split
+        self.p.censor(lhs, below=below, where=where)
 
     def st_prior(self, rest: str, st: _Statement) -> None:
         parts = _split_at(rest, "~")
