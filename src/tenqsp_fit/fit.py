@@ -14,7 +14,7 @@ __all__ = ["fit"]
 
 def fit(problem, *, method: str | None = None, progress: str | None = None):
     """Fit ``problem``: ``result = tf.fit(problem)``. ``method`` overrides the problem's
-    (``"optimize"``; ``"laplace"`` and ``"nuts"`` are not available yet); ``progress``
+    (``"optimize"``, ``"laplace"``; ``"nuts"`` is not available yet); ``progress``
     (``"text"`` or ``"none"``) the problem's ``options progress``. Returns a ``Result``."""
     problem.check()
     name = method or problem._method.name
@@ -23,8 +23,21 @@ def fit(problem, *, method: str | None = None, progress: str | None = None):
                          f"{', '.join(METHODS)}.")  # fmt: skip
     if progress is not None and progress not in ("text", "plot", "none"):
         raise ValueError(f"progress is 'text' or 'none', got {progress!r}.")
+    varying = [d.name for d in problem._varying()]
+    if name == "optimize" and varying:
+        raise ValueError(
+            f"method optimize fits one set of parameters, but {', '.join(varying)} vary "
+            "between units; use method laplace."
+        )
+    if name == "laplace" and not varying:
+        raise ValueError("method laplace is for parameters that vary between units, and none "
+                         "does; use method optimize.")  # fmt: skip
+    if name == "laplace":
+        from .laplace import Laplace, fit_laplace
+
+        return fit_laplace(problem, Laplace(problem), progress=progress)
     if name != "optimize":
-        raise NotImplementedError(f"method {name} is not available yet; method optimize is.")
+        raise NotImplementedError(f"method {name} is not available yet.")
     from .optimize import fit_optimize
 
     return fit_optimize(problem, Objective(problem), progress=progress)

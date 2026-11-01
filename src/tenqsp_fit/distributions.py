@@ -321,3 +321,54 @@ def combined(a, b) -> ErrorModel:
 def power(b, k) -> ErrorModel:
     """Power residual error: SD = b * prediction^k (k = 1 is proportional)."""
     return make_error("power", [b, k])
+
+
+# ----------------------------------------------------------------------------- normal scores
+def quantile(name: str, args: dict, z):
+    """A unit's value from its normal score ``z`` (standard normal between units): the
+    distribution's quantile function at Phi(z), in closed form. ``args`` maps each keyword to a
+    value (a JAX array, one per unit or one for all)."""
+    import jax.numpy as jnp
+    from jax.scipy.special import logit
+    from jax.scipy.stats import norm
+
+    a = args
+    if name == "normal":
+        mean = a["mean"]
+        sd = a["sd"] if "sd" in a else jnp.sqrt(a["var"]) if "var" in a else a["cv"] * jnp.abs(mean)
+        return mean + sd * z
+    if name == "lognormal":
+        if "sdlog" in a:
+            sdlog = a["sdlog"]
+        else:
+            sdlog = jnp.sqrt(jnp.log1p(a["cv"] ** 2))
+        if "median" in a:
+            log_median = jnp.log(a["median"])
+        elif "meanlog" in a:
+            log_median = a["meanlog"]
+        else:  # the arithmetic mean
+            log_median = jnp.log(a["mean"]) - 0.5 * sdlog**2
+        return jnp.exp(log_median + sdlog * z)
+    if name == "exponential":
+        mean = a["mean"] if "mean" in a else 1.0 / a["rate"]
+        return -mean * norm.logcdf(-z)  # -mean log(1 - Phi(z))
+    if name == "logitnormal":
+        return 1.0 / (1.0 + jnp.exp(-(logit(a["median"]) + a["sdlogit"] * z)))
+    if name == "weibull":
+        return a["scale"] * (-norm.logcdf(-z)) ** (1.0 / a["shape"])
+    raise ValueError(f"{name} between units is not available.")  # pragma: no cover
+
+
+def spreads(name: str, args: dict) -> dict:
+    """The other usual ways of stating a distribution's spread, from its arguments (numbers):
+    for a lognormal, sdlog, CV and the variance on the log scale (NONMEM's OMEGA)."""
+    a = args
+    if name == "lognormal":
+        sdlog = a["sdlog"] if "sdlog" in a else math.sqrt(math.log1p(a["cv"] ** 2))
+        return {"sdlog": sdlog, "cv": math.sqrt(math.expm1(sdlog**2)), "var": sdlog**2}
+    if name == "normal":
+        sd = a["sd"] if "sd" in a else math.sqrt(a["var"]) if "var" in a else None
+        return {"sd": sd, "var": sd**2} if sd is not None else {}
+    if name == "logitnormal":
+        return {"sdlogit": a["sdlogit"], "var": a["sdlogit"] ** 2}
+    return {}

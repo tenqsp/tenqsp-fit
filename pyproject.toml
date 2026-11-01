@@ -28,6 +28,7 @@ dependencies = [
     "blackjax>=1.2",
     "arviz>=0.18",
     "pandas>=2.0",
+    "scipy>=1.11",
 ]
 
 [project.urls]

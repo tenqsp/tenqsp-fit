@@ -39,7 +39,7 @@ import numpy as np
 import tenqsp as tq
 from jax.scipy.stats import norm
 
-from .distributions import Fixed
+from .distributions import Fixed, quantile
 from .errors import ProblemError
 
 __all__ = ["Objective", "objective"]
@@ -60,15 +60,14 @@ class Objective:
     bounds of each quantity (``(-inf, inf)`` when none is given); ``obj.floor``: the level
     below which predictions are floored (see the module notes)."""
 
-    def __init__(self, problem):
+    def __init__(self, problem, *, _population: bool = False):
         from .problem import _Estimate, _Fix, _key
 
         problem.check()
         varying = problem._varying()
-        if varying:
-            raise NotImplementedError(
-                f"tf.objective: {', '.join(d.name for d in varying)} vary between units; the "
-                "objective of such a problem (method laplace) is not available yet."
+        if varying and not _population:
+            raise TypeError(  # pragma: no cover (tf.objective gives the Laplace objective)
+                "this problem has parameters that vary between units; use tf.objective."
             )
         m = problem._m
         self.problem = problem
@@ -86,7 +85,8 @@ class Objective:
         _, self.x0, bounds = problem._starts()
         self.bounds = tuple(bounds)
         defined = {d.name: d.formula for d in problem._defines}
-        wrt = [n for n in m.params if (n in starts) or (n in defined)]
+        vary = {d.name for d in varying}
+        wrt = [n for n in m.params if (n in starts) or (n in defined) or (n in vary)]
         missing = [
             n for n, p in m.params.items() if p.value is None and n not in wrt and n not in fixed
         ]
@@ -114,17 +114,52 @@ class Objective:
             f = tq.formula(d.formula)
             formulas.append((d.name, f.jax(list(f.names)), f.names))
         n_units = len(units)
+        # parameters that vary between units: a unit's value is the distribution's quantile
+        # at its normal score z (one column of Z per parameter)
+        self.varying = tuple((d.name, d.dist) for d in varying)
+        spec = []
+        for d in varying:
+            args = []
+            for k, v in d.dist.args:
+                if isinstance(v, Fixed):
+                    args.append((k, "const", float(v.value)))
+                elif isinstance(v, str):
+                    f = tq.formula(v)
+                    args.append((k, "formula", (f.jax(list(f.names)), f.names)))
+                else:
+                    args.append((k, "x", index[f"{d.name}.{k}"]))
+            spec.append((d.name, d.dist.name, args))
 
-        def model_params(x):
+        def values(x, Z=None):
+            """Every quantity per unit: model parameters, one-value and varying quantities,
+            covariates, formulas."""
             env = {}
             for n, v in base.items():
                 env[n] = jnp.full(n_units, float(v))
             for n, v in fit_values.items():
                 env[n] = jnp.full(n_units, x[v[1]] if isinstance(v, tuple) else float(v))
             env.update(covs)
+            for k, (name, dist, args) in enumerate(spec):
+                a = {}
+                for key, kind, v in args:
+                    if kind == "const":
+                        a[key] = v
+                    elif kind == "x":
+                        a[key] = x[v]
+                    else:
+                        fn, names = v
+                        a[key] = fn(*(env[n] for n in names))
+                z = jnp.zeros(n_units) if Z is None else Z[:, k]
+                env[name] = jnp.broadcast_to(quantile(dist, a, z), (n_units,))
             for target, fn, names in formulas:
                 env[target] = jnp.broadcast_to(fn(*(env[k] for k in names)), (n_units,))
+            return env
+
+        def model_params(x, Z=None):
+            env = values(x, Z)
             return jnp.stack([env[n] for n in wrt], axis=1)
+
+        self._unit_values = values
 
         self._model_params = model_params
 
@@ -136,7 +171,7 @@ class Objective:
         sim = problem.model.simulator(outputs=list(outputs), **sim_opts)
         self._fs = sim.function(scenarios, wrt=list(wrt) or [next(iter(m.params))])
         if not wrt:  # nothing reaches the model: still one function, at its own values
-            self._model_params = lambda x: jnp.asarray(self._fs.x0)
+            self._model_params = lambda x, Z=None: jnp.asarray(self._fs.x0)
 
         # ---- links: predictions at the measurements, data, censoring, error model
         errors = {_key(e.lhs): e.model for e in problem._errors}
@@ -248,7 +283,33 @@ class Objective:
         """Each measurement's contribution to -2 log-likelihood: ``{lhs: (units,
         measurements)}`` (0 for padding)."""
         x = jnp.asarray(x, dtype=jnp.float64)
-        sim = self._fs(self._model_params(x))
+        return self._terms(x, self._fs(self._model_params(x)))
+
+    def _link_terms(self, lk, x, f):
+        """-2 log-density of each measurement of a link given its prediction ``f`` (an error
+        model; 0 for padding)."""
+        sd = self._sd(lk, x, f)
+        z = (lk["dv"] - f) / sd
+        normal = z * z + 2.0 * jnp.log(sd) + _LOG_2PI
+        m3 = -2.0 * norm.logcdf((lk["limit"] - f) / sd)
+        return jnp.where(lk["obs"], normal, 0.0) + jnp.where(lk["cens"], m3, 0.0)
+
+    def _link_local(self, lk, x, f):
+        """For the Laplace approximation, per measurement: -2 log-density, its derivative by
+        the prediction, and the Fisher information of the prediction in -log-density
+        (measured: 1/sd^2 + 2 (d log sd/df)^2; censored: the Gauss-Newton term of
+        sqrt(-2 log Phi))."""
+        ones = jnp.ones_like(f)
+        term, dterm = jax.jvp(lambda g: self._link_terms(lk, x, g), (f,), (ones,))
+        _, dlogsd = jax.jvp(lambda g: jnp.log(self._sd(lk, x, g)), (f,), (ones,))
+        sd = self._sd(lk, x, f)
+        r = jnp.sqrt(jnp.maximum(term, 1e-300))
+        info = jnp.where(lk["obs"], 1.0 / sd**2 + 2.0 * dlogsd**2, 0.0) + jnp.where(
+            lk["cens"], (dterm / (2.0 * r)) ** 2, 0.0
+        )
+        return term, dterm, info
+
+    def _terms(self, x, sim) -> dict:
         preds = self._predictions(x, sim)
         out = {}
         mask = jnp.asarray(self._fs.mask)
@@ -270,11 +331,7 @@ class Objective:
                     logd = fn(lk["dv"], f, values)
                 out[lk["lhs"]] = jnp.where(lk["obs"], -2.0 * logd, 0.0)
                 continue
-            sd = self._sd(lk, x, f)
-            z = (lk["dv"] - f) / sd
-            normal = z * z + 2.0 * jnp.log(sd) + _LOG_2PI
-            m3 = -2.0 * norm.logcdf((lk["limit"] - f) / sd)
-            out[lk["lhs"]] = jnp.where(lk["obs"], normal, 0.0) + jnp.where(lk["cens"], m3, 0.0)
+            out[lk["lhs"]] = self._link_terms(lk, x, f)
         return out
 
     @property
@@ -328,7 +385,12 @@ class Objective:
         )
 
 
-def objective(problem) -> Objective:
+def objective(problem):
     """-2 log-likelihood of ``problem`` as a JAX function of its estimated quantities (see
-    ``Objective``): for an optimizer or sampler of your own."""
+    ``Objective``): for an optimizer or sampler of your own. When parameters vary between
+    units, the Laplace approximation of it (see ``tenqsp_fit.laplace.Laplace``)."""
+    if problem._varying():
+        from .laplace import Laplace
+
+        return Laplace(problem)
     return Objective(problem)

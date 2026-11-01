@@ -84,10 +84,13 @@ def test_estimated_sd_by_bfgs(tmp_path, oracle):
 
 
 def test_bounds_keep_values_inside(tmp_path):
-    r = tf.fit(problem(tmp_path, estimate="ka = 1.2 in (1, 1.3), CL = 0.05, ke = 0.1"))
+    with pytest.warns(O.NearBoundWarning, match="ka ended at 1.3, near its upper bound 1.3"):
+        r = tf.fit(problem(tmp_path, estimate="ka = 1.2 in (1, 1.3), CL = 0.05, ke = 0.1"))
     assert 1 < r.estimates["ka"] <= 1.3
     assert r.estimates["ka"] == pytest.approx(1.3, abs=1e-3)  # the optimum lies above
     assert r.scales[0] == ("logit", 1.0, 1.3)
+    assert r.near_bounds == {"ka": ("upper", 1.3)}
+    assert "warning: ka ended at 1.3, near its upper bound 1.3" in repr(r)
 
 
 def test_failed_starts_are_drawn_again(tmp_path):
@@ -147,7 +150,9 @@ def test_waterfall(tmp_path):
 
 def test_methods_not_yet_and_unknown(tmp_path):
     p = problem(tmp_path)
-    with pytest.raises(NotImplementedError, match="method laplace is not available yet"):
+    with pytest.raises(ValueError, match="method laplace is for parameters that vary"):
         tf.fit(p, method="laplace")
+    with pytest.raises(NotImplementedError, match="method nuts is not available yet"):
+        tf.fit(p, method="nuts")
     with pytest.raises(ValueError, match="unknown method 'optimise'. Did you mean 'optimize'"):
         tf.fit(p, method="optimise")

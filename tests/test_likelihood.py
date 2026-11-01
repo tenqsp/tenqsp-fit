@@ -255,15 +255,17 @@ def test_the_models_own_doses_without_a_doses_line(tmp_path):
     np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, 0.3), rtol=1e-8)
 
 
-def test_varying_parameters_wait_for_laplace(data_file):
+def test_varying_parameters_give_the_laplace_objective(data_file):
     p = make(
         data_file,
         "observe conc = DV\nestimate ka ~ lognormal(median=1.4, sdlog=0.3)\n"
         "estimate CL = 0.05, ke = 0.07\nerror conc ~ additive(0.3)",
         method="laplace",
     )
-    with pytest.raises(NotImplementedError, match="ka vary between units"):
-        tf.objective(p)
+    obj = tf.objective(p)
+    assert isinstance(obj, tf.Laplace) and obj.names == ("ka.median", "ka.sdlog", "CL", "ke",
+                                                          "conc.additive")  # fmt: skip
+    assert np.isfinite(float(obj(obj.x0)))
 
 
 def test_a_parameter_without_a_value(data_file):

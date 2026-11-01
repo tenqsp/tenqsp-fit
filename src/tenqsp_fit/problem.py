@@ -800,14 +800,25 @@ class Problem:
         return out
 
     def _starts(self) -> tuple[list[str], np.ndarray, list[tuple[float, float]]]:
-        """The estimated quantities of a problem without varying parameters, their starts and
-        bounds ((-inf, inf) when none is given)."""
+        """The estimated quantities, their starts and bounds ((-inf, inf) when none is given;
+        a logitnormal's median is in (0, 1), a correlation in (-1, 1))."""
         names = self.estimated()
         start, bounds = {}, {}
         for d in self._params:
             if isinstance(d, _Estimate) and d.dist is None:
                 start[d.name] = d.start
                 bounds[d.name] = d.bounds or (-np.inf, np.inf)
+            elif isinstance(d, _Estimate):
+                for k, v in d.dist.args:
+                    if isinstance(v, float):
+                        start[f"{d.name}.{k}"] = v
+                        if d.dist.name == "logitnormal" and k == "median":
+                            bounds[f"{d.name}.{k}"] = (0.0, 1.0)
+        for c in self._correlations:
+            for i, a in enumerate(c.names):
+                for b in c.names[i + 1 :]:
+                    start[f"corr({a},{b})"] = c.start or 0.0
+                    bounds[f"corr({a},{b})"] = (-1.0, 1.0)
         for e in self._errors:
             for q, a in zip(e.model.quantities, e.model.args, strict=True):
                 if not isinstance(a, Fixed):
@@ -1236,7 +1247,7 @@ class Problem:
             )
         est = self.estimated()
         row("estimated", f"{len(est)}: " + " ".join(est))
-        if self._method.name == "optimize" and not self._varying():
+        if self._method.name in ("optimize", "laplace"):
             from .optimize import scale_text, scales
 
             names, x0, bounds = self._starts()

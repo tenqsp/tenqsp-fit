@@ -26,6 +26,7 @@ from .distributions import (
 )
 from .errors import FitTextError, ProblemError
 from .fit import fit
+from .laplace import Laplace
 from .likelihood import Objective, objective
 from .optimize import Result
 from .problem import Problem
@@ -39,6 +40,7 @@ __all__ = [
     "Distribution",
     "ErrorModel",
     "FitTextError",
+    "Laplace",
     "Objective",
     "Observations",
     "Problem",
