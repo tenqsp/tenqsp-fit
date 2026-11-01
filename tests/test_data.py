@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
 """The data as the fit reads them: units and their TenQSP scenarios, the row checks,
-provenance and the grouping of units by shape."""
+and provenance."""
 
 import hashlib
 import warnings
@@ -144,19 +144,6 @@ def test_censor_limits_per_measurement():
     q.censor("conc", below=0.1)
     assert q.units()[0].observations["conc"].below[0] == 0.1
     assert q.units()[0].observations["conc"] != u.observations["conc"]
-
-
-# ----------------------------------------------------------------------------- shapes
-def test_shapes_group_units_by_doses_and_times():
-    df = nonmem(n=4)
-    extra = pd.DataFrame([dict(ID=4, TIME=12.0, AMT=5.0, DV=np.nan, EVID=1, CMT=1, WT=100)])
-    df = pd.concat([df, extra], ignore_index=True)
-    df = df[~((df.ID == 2) & (df.TIME == 4))].reset_index(drop=True)
-    s = problem(df).summary()
-    assert (
-        "shapes     3 builds (2 units: 1 bolus into depot, 4 times; 1 unit: 1 bolus into "
-        "depot, 3 times; 1 unit: 2 boluses into depot, 4 times)"
-    ) in s
 
 
 # ----------------------------------------------------------------------------- row checks

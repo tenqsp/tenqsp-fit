@@ -25,6 +25,7 @@ from .distributions import (
     weibull,
 )
 from .errors import FitTextError, ProblemError
+from .likelihood import Objective, objective
 from .problem import Problem
 from .text import load
 from .units import Observations, Unit
@@ -36,6 +37,7 @@ __all__ = [
     "Distribution",
     "ErrorModel",
     "FitTextError",
+    "Objective",
     "Observations",
     "Problem",
     "ProblemError",
@@ -50,6 +52,7 @@ __all__ = [
     "logitnormal",
     "lognormal",
     "normal",
+    "objective",
     "power",
     "proportional",
     "uniform",

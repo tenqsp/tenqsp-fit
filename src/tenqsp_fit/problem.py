@@ -766,7 +766,7 @@ class Problem:
         rows = []
         units = self.units()
         for u in units:
-            for e in u.scenario.regimen.to_list():
+            for e in U.events(u.scenario):
                 inf = e["kind"] == "infusion"
                 rows.append(
                     {
@@ -849,7 +849,7 @@ class Problem:
                 "left out": left_out,
                 "doses": int(dose.sum())
                 if not (self._doses and self._doses.column)
-                else sum(bool(u.scenario.regimen.to_list()) for u in units),
+                else sum(bool(U.events(u.scenario)) for u in units),
                 "neither": int((~obs & ~dose).sum()),
             },
             "units": {
@@ -1065,7 +1065,16 @@ class Problem:
                 where = f"where {x.where}" if x.where else "(all rows)"
                 if isinstance(x, _Observe):
                     cens = next((c for c in self._censors if _key(c.lhs) == _key(x.lhs)), None)
-                    extra = f"   censored below {_arg(cens.below)} (M3)" if cens else ""
+                    extra = ""
+                    if cens:
+                        dv = pd.to_numeric(df[x.column], errors="coerce")
+                        lim = (
+                            pd.to_numeric(df[cens.below], errors="coerce")
+                            if isinstance(cens.below, str)
+                            else cens.below
+                        )
+                        k = int((rows & (dv <= lim).to_numpy()).sum())
+                        extra = f"   censored below {_arg(cens.below)} (M3): {k} at or below"
                     row(
                         "links" if x is self._links[0] else "",
                         f"{x.lhs} <- {x.column} {where}   {n}{extra}",
@@ -1092,16 +1101,6 @@ class Problem:
                     else "AMT by CMT: " + ", ".join(f"{k} -> {v}" for k, v in d.cmt.items())
                 )
                 row("doses", f"{to}   {ndose} rows")
-            groups = U.shapes(built, self._outputs())
-            parts = [
-                f"{len(ids)} unit{'s' * (len(ids) != 1)}: {U.shape_text(k)}"
-                for k, ids in groups.items()
-            ]
-            more = f"; and {len(parts) - 3} more" if len(parts) > 3 else ""
-            row(
-                "shapes",
-                f"{len(groups)} build{'s' * (len(groups) != 1)} ({'; '.join(parts[:3])}{more})",
-            )
         for i, e in enumerate(self._errors):
             row(
                 "errors" if i == 0 else "",
@@ -1154,6 +1153,18 @@ class Problem:
             elif default is not None:
                 opts.append(f"{k} {_opt(default)} (default)")
         row("options", ", ".join(opts))
+        floored = [x.lhs for x in self._links if isinstance(x, _Observe)
+                   and _key(x.lhs) not in set(self._m.observables)]  # fmt: skip
+        floored += [
+            f"f in {e.lhs} ~ {e.model.name}" for e in self._errors if e.model.name != "additive"
+        ]
+        if floored:
+            atol = self._options.get("atol") or 1e-6
+            row(
+                "near zero",
+                f"kept above 0 by a smooth floor at {_num(float(atol))} (the solver's atol): "
+                + ", ".join(floored),
+            )
         return _Text("\n".join(out))
 
     def _feeds_fit_formula(self, name: str) -> bool:

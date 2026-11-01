@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The data as the fit reads them: one unit per value of the unit column, each with a TenQSP
 scenario (its doses and output times), its measurements per link and its covariates; checks
-of the rows (with row numbers and what to change); provenance; and the grouping of units by
-shape (units of one shape share one build of the model's derivative function)."""
+of the rows (with row numbers and what to change)."""
 
 from __future__ import annotations
 
@@ -81,8 +80,7 @@ class Unit:
     __hash__ = None
 
     def __repr__(self) -> str:
-        reg = self.scenario.regimen
-        n = len(reg.boluses) + len(reg.infusions)
+        n = len(events(self.scenario))
         obs = ", ".join(f"{k} {len(v.times)}" for k, v in self.observations.items())
         return (
             f"<unit {self.id}: {n} dose{'s' * (n != 1)}, {len(self.scenario.times)} times; {obs}>"
@@ -90,6 +88,11 @@ class Unit:
 
 
 # ----------------------------------------------------------------------------- helpers
+def events(sc: tq.Scenario) -> list[dict]:
+    """A scenario's doses as TenQSP lists them; none for the model's own doses."""
+    return sc.regimen.to_list() if isinstance(sc.regimen, tq.Regimen) else []
+
+
 def plain_id(v):
     """A unit's value as TenQSP gives it: a whole number as an int."""
     if isinstance(v, np.generic):
@@ -329,7 +332,10 @@ def build(df: pd.DataFrame, plan: Plan, add, origin_of) -> list[Unit]:
             continue  # no linked measurement: nothing to fit (reported in the summary)
         times = np.unique(np.concatenate([o.times for o in observations.values()]))
         cov = {c: _plain_value(df.loc[in_unit, c].dropna().iloc[0]) for c in plan.covariates}
-        sc = tq.Scenario(name=str(k), regimen=regimens.get(k, tq.Regimen()), times=times)
+        if plan.doses is None:  # no doses line: the model's own doses (if any)
+            sc = tq.Scenario(name=str(k), times=times)
+        else:
+            sc = tq.Scenario(name=str(k), regimen=regimens.get(k, tq.Regimen()), times=times)
         units.append(Unit(k, sc, observations, cov))
         _dose_time_problems(df, units[-1], in_unit, time, plan, add, origin_of)
     return units
@@ -374,8 +380,7 @@ def _dose_time_problems(df, u: Unit, in_unit, time, plan, add, origin_of) -> Non
     the value just after the dose, NONMEM the value just before when the measurement row
     comes first. Unambiguous only when the dose row comes first in the file."""
     doses = [
-        (e["time"] if e["kind"] == "bolus" else e["start"], e["target"])
-        for e in u.scenario.regimen.to_list()
+        (e["time"] if e["kind"] == "bolus" else e["start"], e["target"]) for e in events(u.scenario)
     ]
     if not doses:
         return
@@ -404,34 +409,3 @@ def _dose_time_problems(df, u: Unit, in_unit, time, plan, add, origin_of) -> Non
             "samples, give them a time just before the dose; if they are after the dose, put "
             "the dose row first.",
         )
-
-
-# ----------------------------------------------------------------------------- shapes
-def shape_of(u: Unit, outputs: tuple[str, ...]) -> tuple:
-    """What fixes a build of the derivative function: the doses (kind and place, in time
-    order), the number of output times, and the outputs."""
-    events = sorted(
-        u.scenario.regimen.to_list(),
-        key=lambda e: e["time"] if e["kind"] == "bolus" else e["start"],
-    )
-    return (tuple((e["kind"], e["target"]) for e in events), len(u.scenario.times), outputs)
-
-
-def shapes(units: list[Unit], outputs: tuple[str, ...]) -> dict[tuple, list]:
-    """Units grouped by shape, in the order the shapes first appear: {shape: [unit ids]}."""
-    out: dict[tuple, list] = {}
-    for u in units:
-        out.setdefault(shape_of(u, outputs), []).append(u.id)
-    return out
-
-
-def shape_text(shape: tuple) -> str:
-    events, n_times, _ = shape
-    counts: dict[tuple, int] = {}
-    for e in events:
-        counts[e] = counts.get(e, 0) + 1
-    doses = ", ".join(
-        f"{n} {kind}{'es' if kind == 'bolus' and n != 1 else 's' if n != 1 else ''} into {target}"
-        for (kind, target), n in counts.items()
-    )
-    return f"{doses or 'no doses'}, {n_times} times"
