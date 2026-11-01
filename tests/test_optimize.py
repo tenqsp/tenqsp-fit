@@ -4,6 +4,8 @@
 model estimated). Oracles: oral one-compartment PK in closed form, fitted by scipy's
 least squares; for an estimated additive sd, its closed form at the minimum (sd^2 = RSS/n)."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -127,6 +129,44 @@ def test_ctrl_c_keeps_the_work(tmp_path, monkeypatch):
     assert r.status == "stopped"
     assert len(r.trace) > 0 and np.isfinite(r.m2ll)
     assert set(r.starts["status"]) <= {"stopped", "converged"}
+    # standard errors at a point that is not the minimum would mislead: none are given
+    assert np.isnan(r.se).all() and r.covariance_status == O.STOPPED_SE
+    assert "standard errors not computed: the fit was stopped" in repr(r)
+
+
+def test_live_plot_page(tmp_path, monkeypatch, capsys):
+    import re
+    import webbrowser
+
+    from tenqsp_fit import live
+
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(live, "REFRESH", 0.0)
+    assert live.default_progress() == "text"  # not in a notebook
+    p = problem(tmp_path, options="starts=2 seed=1")
+    p._options["progress"] = "plot"
+    r = tf.fit(p)
+    out = capsys.readouterr().out
+    url = re.search(r"live plot: (\S+)", out).group(1)
+    assert opened == [url]
+    page = Path(url.removeprefix("file://")).read_text()
+    assert "data:image/png;base64," in page
+    assert "http-equiv" not in page  # the last page no longer refreshes
+    assert "optimize  2 starts:" in out  # the text's last line
+    assert r.status == "converged"
+
+
+def test_plot_trace(tmp_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    r = tf.fit(problem(tmp_path, options="starts=2 seed=1"))
+    fig = r.plot_trace()
+    shown = [ax for ax in fig.axes if ax.get_visible()]
+    assert len(shown) == 1 + len(r.names)
+    assert [ax.get_title() for ax in shown[1:]] == list(r.names)
+    assert len(shown[0].lines) == 2  # one line per start
 
 
 def test_progress_text_and_none(tmp_path, capsys):

@@ -259,3 +259,18 @@ def test_method_and_problem_must_agree(tmp_path):
     p = lin_problem(tmp_path)
     with pytest.raises(ValueError, match="use method laplace"):
         tf.fit(p, method="optimize")
+
+
+def test_ctrl_c_keeps_the_work_with_laplace(tmp_path, monkeypatch):
+    from tenqsp_fit import optimize as O
+
+    def update(self, steps, *a, **k):
+        if steps.max() >= 2 and not k.get("last"):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(O._Progress, "update", update)
+    r = tf.fit(lin_problem(tmp_path))
+    assert r.status == "stopped"
+    assert len(r.trace) >= 2 and np.isfinite(r.m2ll)
+    assert np.isnan(r.se).all() and r.covariance_status == O.STOPPED_SE
+    assert r.individual().shape[0] == 8  # the units' values at the point reached

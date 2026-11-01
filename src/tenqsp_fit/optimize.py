@@ -20,9 +20,11 @@
   the CPU runs them one after the other).
 - **Failed runs** during the fit are rejected steps: every residual becomes a large constant,
   so the step is refused and the step size shrinks. They are counted.
-- **Progress.** A block of text rewritten in place in a terminal, a line every 10 s
-  elsewhere; ``progress none`` for quiet. The record is kept (``result.trace``), and Ctrl-C
-  stops the fit and returns what it has, marked "stopped".
+- **Progress.** ``progress text``: a block rewritten in place in a terminal, a line every 10 s
+  elsewhere. ``progress plot`` (the default in a notebook): the live plot (``live.py``).
+  ``progress none`` for quiet. The record is kept (``result.trace``,
+  ``result.plot_trace()``), and Ctrl-C (or a notebook's stop) stops the fit and returns what
+  it has, marked "stopped", without standard errors.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ import jax.numpy as jnp
 import numpy as np
 import optimistix as optx
 import pandas as pd
+
+from .live import default_progress, draw_trace
 
 __all__ = ["Result"]
 
@@ -166,6 +170,16 @@ def warn_near_bounds(result) -> None:
 FD_STEP = 1e-3  # central differences for the standard errors, on the estimation scale
 
 
+STOPPED_SE = "not computed: the fit was stopped before it converged"
+
+
+def no_covariance(p: int) -> dict:
+    """No standard errors (a stopped fit: the Hessian away from the minimum means nothing)."""
+    nan = np.full((p, p), np.nan)
+    return dict(se=np.full(p, np.nan), ci=np.full((p, 2), np.nan), cov_u=nan, cov=nan,
+                covariance_status=STOPPED_SE, hessian_u=nan)  # fmt: skip
+
+
 def covariance(value, u, sc, *, gradient=None) -> dict:
     """Standard errors from the Hessian of -2LL on the estimation scale, by central
     differences of the values (or of a ``gradient``, when there is one; NONMEM's covariance
@@ -230,9 +244,9 @@ class Result:
     ``result.table()`` (estimates, standard errors, RSE %, 95 % intervals), ``result.se``,
     ``result.cov`` (covariance of the estimates), ``result.starts`` (each start's values,
     its end, -2LL, steps, status), ``result.trace`` (every step of every start),
-    ``result.plot_waterfall()``. With parameters that vary between units (method laplace),
-    also ``result.individual()`` (each unit's scores and values) and ``result.shrinkage``.
-    ``print`` shows the table."""
+    ``result.plot_trace()``, ``result.plot_waterfall()``. With parameters that vary between
+    units (method laplace), also ``result.individual()`` (each unit's scores and values) and
+    ``result.shrinkage``. ``print`` shows the table."""
 
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -240,6 +254,12 @@ class Result:
     @property
     def estimates(self) -> dict[str, float]:
         return dict(zip(self.names, map(float, self.x), strict=True))
+
+    def plot_trace(self):
+        """The path of the fit, as the live plot showed it: -2LL against the step and one
+        panel per quantity, one line per start (the best dark). Returns the figure."""
+        return draw_trace(self.trace, self.names,
+                          title=f"{self.problem.name}: {self.method}, {self.status}")  # fmt: skip
 
     def plot_waterfall(self, ax=None):
         """The final -2LL of every start, sorted, above the best (the shaded band: within 0.1,
@@ -372,7 +392,7 @@ def fit_optimize(problem, obj, *, progress=None) -> Result:
     n_starts = int(opts.get("starts", 1))
     rng = np.random.default_rng(int(opts.get("seed", 0)))
     maxiter = int(opts.get("maxiter") or DEFAULT_MAXITER)
-    progress = progress or opts.get("progress") or "text"
+    progress = progress or opts.get("progress") or default_progress()
     t_start = time.perf_counter()
 
     least_squares = not obj.error_estimated
@@ -416,12 +436,15 @@ def fit_optimize(problem, obj, *, progress=None) -> Result:
         )
 
     run = run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
-                     "optimize", const)  # fmt: skip
+                     "optimize", const, problem.name)  # fmt: skip
     final = np.array([float(v) for v in ThreadPoolExecutor(len(U_start)).map(obj, list(run.X))])
     best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
-    gradient = jax.jit(jax.grad(lambda u: obj._minus2ll(to_x(u, sc))))
-    cov = covariance(None, to_u(run.X[best], sc), sc,
-                     gradient=lambda u: gradient(jnp.asarray(u)))  # fmt: skip
+    if run.status == "stopped":
+        cov = no_covariance(len(names))
+    else:
+        gradient = jax.jit(jax.grad(lambda u: obj._minus2ll(to_x(u, sc))))
+        cov = covariance(None, to_u(run.X[best], sc), sc,
+                         gradient=lambda u: gradient(jnp.asarray(u)))  # fmt: skip
     return finish(problem, obj, "optimize", "Levenberg-Marquardt" if least_squares else "BFGS",
                   names, x0, sc, U_start, run, final, redrawn, obj.bounds, t_start,
                   **cov)  # fmt: skip
@@ -459,7 +482,7 @@ class _Run:
 
 
 def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers, label,
-               const=0.0) -> _Run:  # fmt: skip
+               const=0.0, problem_name="") -> _Run:  # fmt: skip
     """Every start in its own thread (JAX runs them on separate cores), with the live text
     and Ctrl-C keeping the work. ``step(u, state) -> (u, state, done, ok, f)``."""
     t_start = time.perf_counter()
@@ -491,7 +514,7 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
                 done[j] = True
                 return
 
-    shown = _Progress(progress, names, n, label)
+    shown = _Progress(progress, names, n, label, problem_name, trace)
     status = None
     futures = [workers.submit(run, j) for j in range(n)]
     try:
@@ -506,7 +529,7 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
         for f in futures:
             f.exception()  # wait for each start to finish its step
     workers.shutdown()
-    shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True)
+    shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True, status=status)
     return _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status)
 
 
@@ -563,16 +586,33 @@ def _x_of(U, sc):
 
 class _Progress:
     """The live text: a block rewritten in place in a terminal; elsewhere a line every 10 s
-    (and at the end)."""
+    (and at the end). With ``progress plot``, the live plot instead (and the text's last
+    line)."""
 
-    def __init__(self, mode, names, n, label="optimize"):
+    def __init__(self, mode, names, n, label="optimize", problem_name="", trace=None):
         self.mode, self.names, self.n, self.label = mode, names, n, label
         self.tty = sys.stdout.isatty()
         self.lines = 0
         self.printed = -1e9
+        self.trace = trace if trace is not None else []
+        self.plot = None
+        if mode == "plot":
+            from .live import LivePlot
 
-    def update(self, steps, m2ll, X, done, seconds, last=False):
-        if self.mode == "none" or not np.isfinite(m2ll).any():
+            self.plot = LivePlot(names, label, problem_name or label)
+
+    def update(self, steps, m2ll, X, done, seconds, last=False, status=None):
+        if self.mode == "none":
+            return
+        if self.plot is not None:
+            n_done = int(done.sum())
+            text = status or (f"{n_done} of {self.n} start{'s' * (self.n != 1)} done"
+                              if self.n > 1 else ("done" if last else "running"))  # fmt: skip
+            self.plot.update(list(self.trace), ["start", "iteration", "-2LL", *self.names],
+                             text, seconds, last=last)  # fmt: skip
+            if not last:
+                return
+        if not np.isfinite(m2ll).any():
             return
         best = int(np.nanargmin(np.where(np.isfinite(m2ll), m2ll, np.inf)))
         clock = f"{int(seconds // 60)}:{int(seconds % 60):02d}"
@@ -582,7 +622,9 @@ class _Progress:
             f"done   steps {steps.min()}-{steps.max()}   best -2LL {m2ll[best]:.4f}   {clock}"
         )
         vals = "  ".join(f"{k} {v:.4g}" for k, v in zip(self.names, X[best], strict=True))
-        if self.tty:
+        if self.plot is not None:  # the plot showed the run; the text gives its end
+            print(head + "  |  " + vals, flush=True)
+        elif self.tty:
             block = [head, f"          best: {vals}"]
             if self.lines:
                 sys.stdout.write(f"\033[{self.lines}F")

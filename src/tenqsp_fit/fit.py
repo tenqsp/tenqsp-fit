@@ -15,14 +15,15 @@ __all__ = ["fit"]
 def fit(problem, *, method: str | None = None, progress: str | None = None):
     """Fit ``problem``: ``result = tf.fit(problem)``. ``method`` overrides the problem's
     (``"optimize"``, ``"laplace"``; ``"nuts"`` is not available yet); ``progress``
-    (``"text"`` or ``"none"``) the problem's ``options progress``. Returns a ``Result``."""
+    (``"text"``, ``"plot"`` or ``"none"``) the problem's ``options progress`` (default: the
+    live plot in a notebook, the text elsewhere). Returns a ``Result``."""
     problem.check()
     name = method or problem._method.name
     if name not in METHODS:
         raise ValueError(f"unknown method '{name}'.{nearest(name, METHODS)} Methods: "
                          f"{', '.join(METHODS)}.")  # fmt: skip
     if progress is not None and progress not in ("text", "plot", "none"):
-        raise ValueError(f"progress is 'text' or 'none', got {progress!r}.")
+        raise ValueError(f"progress is 'text', 'plot' or 'none', got {progress!r}.")
     varying = [d.name for d in problem._varying()]
     if name == "optimize" and varying:
         raise ValueError(

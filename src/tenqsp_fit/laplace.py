@@ -58,6 +58,7 @@ import pandas as pd
 from scipy.optimize import minimize
 
 from .likelihood import Objective
+from .live import default_progress
 from .optimize import (
     BAD_VALUE,
     DEFAULT_MAXITER,
@@ -66,6 +67,7 @@ from .optimize import (
     covariance,
     draw_starts,
     finish,
+    no_covariance,
     scales,
     to_u,
     to_x,
@@ -325,7 +327,7 @@ def fit_laplace(problem, obj: Laplace, *, progress=None):
     n_starts = int(opts.get("starts", 1))
     rng = np.random.default_rng(int(opts.get("seed", 0)))
     maxiter = int(opts.get("maxiter") or DEFAULT_MAXITER)
-    progress = progress or opts.get("progress") or "text"
+    progress = progress or opts.get("progress") or default_progress()
     t_start = time.perf_counter()
     p = len(names)
     Z0 = np.zeros((obj.n, obj.q))
@@ -391,7 +393,7 @@ def fit_laplace(problem, obj: Laplace, *, progress=None):
             done[j] = True
             messages[j] = f"ended: {res.message}"
 
-    shown = _Progress(progress, names, n, "laplace")
+    shown = _Progress(progress, names, n, "laplace", problem.name, trace)
     status = None
     futures = [starts_pool.submit(run, j) for j in range(n)]
     try:
@@ -406,21 +408,24 @@ def fit_laplace(problem, obj: Laplace, *, progress=None):
         for f in futures:
             f.exception()
     starts_pool.shutdown()
-    shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True)
+    shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True, status=status)
 
     final = np.array([float(v) for v in pool.map(obj, list(X))])
     run_ = _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status)
     best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
     Z = obj.modes(X[best])
     pool.shutdown()
-    cov = covariance(
-        None,
-        to_u(X[best], sc),
-        sc,
-        gradient=lambda u: gradient(
-            jnp.asarray(u), jnp.asarray(obj.modes(to_x(jnp.asarray(u), sc), Z))
-        ),
-    )
+    if status == "stopped":
+        cov = no_covariance(p)
+    else:
+        cov = covariance(
+            None,
+            to_u(X[best], sc),
+            sc,
+            gradient=lambda u: gradient(
+                jnp.asarray(u), jnp.asarray(obj.modes(to_x(jnp.asarray(u), sc), Z))
+            ),
+        )
     shrink = {name: float(1.0 - np.std(Z[:, k], ddof=1)) if obj.n > 1 else float("nan")
               for k, (name, _) in enumerate(obj.varying)}  # fmt: skip
     return finish(problem, obj, "laplace", "BFGS, FOCE-I", names, x0, sc, U_start, run_, final,
