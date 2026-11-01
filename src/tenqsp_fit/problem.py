@@ -18,6 +18,7 @@ import pandas as pd
 import tenqsp as tq
 
 from . import data as D
+from . import units as U
 from .distributions import (
     _LATER,
     BETWEEN_UNITS,
@@ -62,6 +63,8 @@ class _Data(_Decl):
     source: str | None  # the file name as written; None for a table given in Python
     columns: dict[str, str]
     table: pd.DataFrame = field(compare=False, repr=False)
+    sha256: str = field(default="", compare=False, repr=False)
+    path: str | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass
@@ -151,8 +154,27 @@ class _ModelInfo:
         self.compartments = [c.name for c in ir.compartments]
         self.fields = [f.name for f in ir.fields]
         self.observables = [o.name for o in ir.observables]
+        self.observable_exprs = {o.name: o.expr for o in ir.observables}
         self.n_states = sum(ir.state_count().values())
         self.hash = ir.content_hash()
+
+    def reads(self, observable: str) -> set[str]:
+        """Compartments and fields an observable reads at the same time point, through the
+        model's named formulas."""
+        out, seen, todo = set(), set(), [observable]
+        states = set(self.compartments) | set(self.fields)
+        while todo:
+            n = todo.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            if n in states:
+                out.add(n)
+            elif n in self.observable_exprs:
+                todo.extend(tq.formula(self.observable_exprs[n]).names)
+            elif n in self.definitions:
+                todo.extend(tq.formula(self.definitions[n]).names)
+        return out
 
     def param_names(self, text: str) -> set[str]:
         """Model parameters a formula depends on, through the model's named formulas."""
@@ -211,9 +233,10 @@ class Problem:
     def _set_data(self, source, columns, *, base: Path | None = None, origin=None) -> None:
         if self._data is not None:
             raise ValueError("the data are given twice; give one table.")
-        table = D.apply_map(D.read_table(source, base), columns)
+        table, sha, path = D.read_table(source, base)
+        table = D.apply_map(table, columns)
         written = None if isinstance(source, pd.DataFrame) else str(source)
-        self._data = _Data(written, dict(columns), table, origin=origin)
+        self._data = _Data(written, dict(columns), table, sha, path, origin=origin)
 
     def unit(self, column: str) -> None:
         """The column naming the experimental unit (a subject, animal, flask or well): rows
@@ -647,8 +670,17 @@ class Problem:
                     "additive(<start of the SD>)  (or proportional, combined, power).",
                 )
         if df is not None:
+            before = len(out)
+            U.row_problems(df, self._unit if self._unit in columns else None, add, self._data)
+            unit = self._unit if self._unit in columns else None
+            if self._doses is not None and self._doses.column is not None:
+                U.constant_problems(df, unit, self._doses.column, "the dose", add, self._doses)
+            for c in self._covariates():
+                U.constant_problems(df, unit, c, "a covariate", add, self._data)
             out += self._link_problems(df, add)
             out += self._dose_problems(df, add)
+            if len(out) == before:  # the rows are readable: build the units
+                self._build(add)
 
         # priors name estimated quantities
         est = set(self.estimated())
@@ -679,6 +711,155 @@ class Problem:
         if not self.estimated():
             out.append("nothing is estimated; add an estimate line.")
         return out
+
+    def _covariates(self) -> list[str]:
+        """Data columns the fit's formulas use (read once per unit)."""
+        if self._data is None:
+            return []
+        columns = set(map(str, self._data.table.columns))
+        taken = self._fit_names() | set(self._m.params)
+        texts = [d.formula for d in self._defines] + [
+            v for d in self._varying() for _, v in d.dist.args if isinstance(v, str)
+        ]
+        names = {n for t in texts for n in tq.formula(t).names}
+        return sorted(n for n in names if n in columns and n not in taken)
+
+    def _plan(self) -> U.Plan:
+        return U.Plan(
+            unit=self._unit,
+            doses=self._doses,
+            links=[(x.lhs, x.column, x.where) for x in self._links if isinstance(x, _Observe)],
+            ignored=[(x.column, x.where) for x in self._links if isinstance(x, _Ignore)],
+            censors={_key(c.lhs): c.below for c in self._censors},
+            covariates=self._covariates(),
+            reads={o: self._m.reads(o) for o in self._m.observables},
+        )
+
+    def _build(self, add) -> list[U.Unit]:
+        origins = {"doses": self._doses, "data": self._data}
+        return U.build(self._data.table, self._plan(), add, lambda k: origins[k])
+
+    def _outputs(self) -> tuple[str, ...]:
+        """The observables the links read: the outputs of every build."""
+        names = {n for x in self._links if isinstance(x, _Observe) for n in tq.formula(x.lhs).names}
+        return tuple(o for o in self._m.observables if o in names)
+
+    # ------------------------------------------------------------------ the data as read
+    def units(self) -> tuple[U.Unit, ...]:
+        """The data as the fit reads them: one ``tf.Unit`` per unit, in the order they first
+        appear, each with a TenQSP scenario (its doses and the times of its measurements),
+        its observations by link and its covariates. Checks the problem first."""
+        self.check()
+        problems: list[str] = []
+        units = self._build(lambda decl, msg: problems.append(msg))
+        if problems:  # check() builds the units too, so this does not happen
+            raise ProblemError(problems)
+        return tuple(units)
+
+    def table(self) -> pd.DataFrame:
+        """The data as the fit reads them, as one NONMEM-style table: a row per dose (EVID 1,
+        AMT, RATE for an infusion, CMT the compartment's name) and per linked measurement
+        (EVID 0, DV, DVID the link), sorted by unit and time, with the covariates and, for a
+        censored link, the limit (LLOQ). Doses set by ADDL are written out one per row.
+        ``table().to_csv("data.csv", index=False, na_rep=".")`` writes it for NONMEM-style
+        tools (compartments by name)."""
+        rows = []
+        units = self.units()
+        for u in units:
+            for e in u.scenario.regimen.to_list():
+                inf = e["kind"] == "infusion"
+                rows.append(
+                    {
+                        "ID": u.id,
+                        "TIME": e["start"] if inf else e["time"],
+                        "EVID": 1,
+                        "AMT": e["rate"] * e["duration"] if inf else e["amount"],
+                        "RATE": e["rate"] if inf else 0.0,
+                        "CMT": e["target"],
+                        "DVID": None,
+                        "DV": np.nan,
+                        "LLOQ": np.nan,
+                        "_order": 0,
+                        **u.covariates,
+                    }
+                )
+            for lhs, o in u.observations.items():
+                for i, t in enumerate(o.times):
+                    rows.append(
+                        {
+                            "ID": u.id,
+                            "TIME": t,
+                            "EVID": 0,
+                            "AMT": np.nan,
+                            "RATE": np.nan,
+                            "CMT": None,
+                            "DVID": lhs,
+                            "DV": o.values[i],
+                            "LLOQ": np.nan if o.below is None else o.below[i],
+                            "_order": 1,
+                            **u.covariates,
+                        }
+                    )
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        rank = {u.id: i for i, u in enumerate(units)}
+        df["_unit"] = df["ID"].map(rank)
+        df = df.sort_values(["_unit", "TIME", "_order"], kind="stable")
+        df = df.drop(columns=["_unit", "_order"]).reset_index(drop=True)
+        if not self._censors:
+            df = df.drop(columns="LLOQ")
+        if "RATE" in df and not (df["RATE"].fillna(0) > 0).any():
+            df = df.drop(columns="RATE")
+        return df
+
+    def provenance(self) -> dict:
+        """Where the data came from and what the fit reads of them, as recorded with every
+        fit: the file and its SHA-256, the column map, the rows read, measured, dosed and
+        left out (with the conditions), the units, and the model and package versions."""
+        from . import __version__
+
+        self.check()
+        d, df = self._data, self._data.table
+        obs, dose = D.observation_rows(df), D.dose_rows(df)
+        units = self.units()
+        linked = np.zeros(len(df), bool)
+        for _lhs, col, where in self._plan().links:
+            linked |= U.link_rows(df, col, where)
+        left_out = []
+        for x in self._links:
+            if isinstance(x, _Ignore):
+                r = U.link_rows(df, x.column, x.where)
+                left_out.append(
+                    {"rule": f"ignore {x.column} where {x.where}", "rows": int(r.sum())}
+                )
+        all_units = df[self._unit].nunique() if self._unit else 1
+        return {
+            "data": {
+                "file": d.path,
+                "as written": d.source,
+                "sha256": d.sha256,
+                "column map": dict(d.columns),
+                "rows": len(df),
+                "columns": list(map(str, df.columns)),
+            },
+            "rows": {
+                "measurements": int(obs.sum()),
+                "linked": int(linked.sum()),
+                "left out": left_out,
+                "doses": int(dose.sum())
+                if not (self._doses and self._doses.column)
+                else sum(bool(u.scenario.regimen.to_list()) for u in units),
+                "neither": int((~obs & ~dose).sum()),
+            },
+            "units": {
+                "column": self._unit,
+                "in the data": int(all_units),
+                "with measurements": len(units),
+            },
+            "model": {"name": self._m.name, "hash": self._m.hash},
+            "versions": {"tenqsp": tq.__version__, "tenqsp_fit": __version__},
+        }
 
     def _unknown_in_formula(self, n: str, where: str, columns: set[str]) -> str:
         if n in self._m.definitions:
@@ -862,8 +1043,12 @@ class Problem:
             out.append(f"{label:<11}{text}")
 
         if df is not None:
+            built = self._build(lambda decl, msg: None)
+            empty = n_units - len(built)
             row(
-                "units", f"{unit}: {n_units} units" if unit else "none named: all rows are one unit"
+                "units",
+                (f"{unit}: {n_units} units" if unit else "none named: all rows are one unit")
+                + (f", {empty} without linked measurements (not fitted)" if empty else ""),
             )
             obs = D.observation_rows(df)
             for x in self._links:
@@ -901,8 +1086,22 @@ class Problem:
                 )
             else:
                 ndose = int(D.dose_rows(df).sum())
-                to = d.into if d.into else ", ".join(f"CMT {k} -> {v}" for k, v in d.cmt.items())
-                row("doses", f"AMT -> {to}   {ndose} rows")
+                to = (
+                    f"AMT -> {d.into}"
+                    if d.into
+                    else "AMT by CMT: " + ", ".join(f"{k} -> {v}" for k, v in d.cmt.items())
+                )
+                row("doses", f"{to}   {ndose} rows")
+            groups = U.shapes(built, self._outputs())
+            parts = [
+                f"{len(ids)} unit{'s' * (len(ids) != 1)}: {U.shape_text(k)}"
+                for k, ids in groups.items()
+            ]
+            more = f"; and {len(parts) - 3} more" if len(parts) > 3 else ""
+            row(
+                "shapes",
+                f"{len(groups)} build{'s' * (len(groups) != 1)} ({'; '.join(parts[:3])}{more})",
+            )
         for i, e in enumerate(self._errors):
             row(
                 "errors" if i == 0 else "",

@@ -27,6 +27,7 @@ from .distributions import (
 from .errors import FitTextError, ProblemError
 from .problem import Problem
 from .text import load
+from .units import Observations, Unit
 
 __version__ = "0.0.1"
 
@@ -35,8 +36,10 @@ __all__ = [
     "Distribution",
     "ErrorModel",
     "FitTextError",
+    "Observations",
     "Problem",
     "ProblemError",
+    "Unit",
     "additive",
     "beta",
     "combined",

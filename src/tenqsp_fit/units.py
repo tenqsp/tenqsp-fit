@@ -1,0 +1,437 @@
+# SPDX-FileCopyrightText: 2026 Yonsei University Health System
+# SPDX-License-Identifier: Apache-2.0
+"""The data as the fit reads them: one unit per value of the unit column, each with a TenQSP
+scenario (its doses and output times), its measurements per link and its covariates; checks
+of the rows (with row numbers and what to change); provenance; and the grouping of units by
+shape (units of one shape share one build of the model's derivative function)."""
+
+from __future__ import annotations
+
+import warnings
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+import tenqsp as tq
+
+from . import data as D
+from .errors import nearest
+
+__all__ = ["Observations", "Unit"]
+
+# columns TenQSP's dose-table reader takes
+_DOSE_COLUMNS = ("TIME", "AMT", "RATE", "DUR", "ADDL", "II", "EVID", "MDV", "SS")
+
+
+@dataclass(frozen=True, eq=False)
+class Observations:
+    """The measurements of one link in one unit: ``times``, ``values``, the data ``rows``
+    (counted from 1 after the header) and, for a censored link, the limit of each
+    measurement (``below``; None when the link is not censored)."""
+
+    link: str
+    times: np.ndarray
+    values: np.ndarray
+    rows: np.ndarray
+    below: np.ndarray | None = None
+
+    def __eq__(self, other) -> bool:  # the same data; row numbers aside
+        if not isinstance(other, Observations):
+            return NotImplemented
+        same_below = (self.below is None) == (other.below is None) and (
+            self.below is None or np.array_equal(self.below, other.below, equal_nan=True)
+        )
+        return (
+            self.link == other.link
+            and np.array_equal(self.times, other.times)
+            and np.array_equal(self.values, other.values, equal_nan=True)
+            and same_below
+        )
+
+    __hash__ = None
+
+    def __repr__(self) -> str:
+        return f"<{len(self.times)} observations of {self.link}>"
+
+
+@dataclass(frozen=True, eq=False)
+class Unit:
+    """One experimental unit (a subject, an animal, a flask, a well) as the fit reads it:
+    its ``id``, a TenQSP ``scenario`` (its doses as a regimen and the times of its
+    measurements; no parameter values: those come from the fit), its ``observations`` by
+    link, and its ``covariates`` (the data columns the fit's formulas use, one value per
+    unit). Two units are equal when they hold the same data, whatever the rows they came
+    from."""
+
+    id: object
+    scenario: tq.Scenario
+    observations: dict
+    covariates: dict
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Unit):
+            return NotImplemented
+        return (
+            self.id == other.id
+            and self.scenario == other.scenario
+            and self.covariates == other.covariates
+            and self.observations == other.observations
+        )
+
+    __hash__ = None
+
+    def __repr__(self) -> str:
+        reg = self.scenario.regimen
+        n = len(reg.boluses) + len(reg.infusions)
+        obs = ", ".join(f"{k} {len(v.times)}" for k, v in self.observations.items())
+        return (
+            f"<unit {self.id}: {n} dose{'s' * (n != 1)}, {len(self.scenario.times)} times; {obs}>"
+        )
+
+
+# ----------------------------------------------------------------------------- helpers
+def plain_id(v):
+    """A unit's value as TenQSP gives it: a whole number as an int."""
+    if isinstance(v, np.generic):
+        v = v.item()
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return v
+
+
+def rows_text(idx) -> str:
+    """Data rows (0-based positions) as the user counts them: "row 3", "rows 3, 7 and 9",
+    "rows 3, 7, 9, 12, 15 and 4 more"."""
+    n = [int(i) + 1 for i in idx]
+    if len(n) == 1:
+        return f"row {n[0]}"
+    if len(n) <= 5:
+        return f"rows {', '.join(map(str, n[:-1]))} and {n[-1]}"
+    return f"rows {', '.join(map(str, n[:5]))} and {len(n) - 5} more"
+
+
+def _have(idx) -> str:
+    return "has" if len(idx) == 1 else "have"
+
+
+def link_rows(df: pd.DataFrame, column: str, where: str | None) -> np.ndarray:
+    """The rows a link (or an ``ignore`` line) reads: measurements in ``column`` (for DV, the
+    observation records), picked by ``where``."""
+    if column == "DV":
+        rows = D.observation_rows(df)
+    else:  # a wide table: a column per observable
+        rows = df[column].notna().to_numpy() & ~D.dose_rows(df)
+    if where is not None:
+        rows = rows & D.evaluate_condition(where, df)
+    return rows
+
+
+def _num_column(df, col, add, origin, what):
+    """A column as numbers; text that is not a number is a problem with its rows."""
+    values = pd.to_numeric(df[col], errors="coerce")
+    bad = np.flatnonzero(values.isna().to_numpy() & df[col].notna().to_numpy())
+    if len(bad):
+        add(
+            origin,
+            f"{col}: {rows_text(bad)} {'is' if len(bad) == 1 else 'are'} not numbers ({what}).",
+        )
+    return values
+
+
+# ----------------------------------------------------------------------------- row checks
+def row_problems(df: pd.DataFrame, unit: str | None, add, origin) -> None:
+    """Pre-flight checks of the rows: each problem names its rows and what to change."""
+    cols = set(df.columns)
+    obs, dose = D.observation_rows(df), D.dose_rows(df)
+    used = obs | dose
+    if "TIME" not in cols:
+        add(
+            origin,
+            f"the data have no TIME column.{nearest('TIME', cols)} Map it: data ... "
+            "with TIME=<column>.",
+        )
+        return
+    time = _num_column(df, "TIME", add, origin, "times")
+    missing = np.flatnonzero(time.isna().to_numpy() & used)
+    if len(missing):
+        add(origin, f"TIME is missing on {rows_text(missing)}; give every record its time.")
+    neg = np.flatnonzero((time < 0).to_numpy() & used)
+    if len(neg):
+        add(
+            origin,
+            f"TIME is below 0 on {rows_text(neg)}; the model starts at 0. Shift the times so the "
+            "first record is at 0 or later.",
+        )
+    if unit is not None and unit in cols:
+        no_unit = np.flatnonzero(df[unit].isna().to_numpy() & used)
+        if len(no_unit):
+            add(origin, f"{unit} (the unit) is missing on {rows_text(no_unit)}.")
+    for c in ("AMT", "DV", "EVID", "MDV", "RATE", "SS", "ADDL", "II"):
+        if c in cols:
+            _num_column(df, c, add, origin, "a NONMEM column holds numbers")
+    if "EVID" in cols:
+        evid = pd.to_numeric(df["EVID"], errors="coerce")
+        bad = np.flatnonzero(~evid.isin([0, 1, 2, 3, 4]).to_numpy() & df["EVID"].notna())
+        if len(bad):
+            add(origin, f"EVID is 0, 1, 2, 3 or 4; {rows_text(bad)} {_have(bad)} other values.")
+        resets = np.flatnonzero(evid.isin([3, 4]).to_numpy())
+        if len(resets):
+            add(
+                origin,
+                f"EVID 3 or 4 (a reset) on {rows_text(resets)}: resets are not supported yet. "
+                "Split the unit at the reset into two units (a new ID for each period), or give "
+                "the dosing history before it.",
+            )
+        amt = pd.to_numeric(df["AMT"], errors="coerce").fillna(0) if "AMT" in cols else None
+        if amt is not None:
+            r = np.flatnonzero(((evid == 0) & (amt != 0)).to_numpy())
+            if len(r):
+                add(
+                    origin,
+                    f"{rows_text(r)} {_have(r)} EVID 0 (a measurement) and a dose amount "
+                    "(AMT); a dose has EVID 1. Give the dose and the measurement on separate rows.",
+                )
+            r = np.flatnonzero(((evid == 1) & (amt == 0)).to_numpy())
+            if len(r):
+                add(origin, f"{rows_text(r)} {_have(r)} EVID 1 (a dose) but no amount (AMT).")
+        if "MDV" in cols:
+            mdv = pd.to_numeric(df["MDV"], errors="coerce").fillna(0)
+            r = np.flatnonzero(((evid == 0) & (mdv == 1)).to_numpy())
+            if len(r):
+                add(
+                    origin,
+                    f"{rows_text(r)} {_have(r)} EVID 0 (a measurement) and MDV 1 (no measurement); "
+                    "set EVID 2 for a row that is not a measurement.",
+                )
+        if "DV" in cols:
+            r = np.flatnonzero(((evid == 0) & df["DV"].isna()).to_numpy())
+            if len(r):
+                add(
+                    origin,
+                    f"{rows_text(r)} {_have(r)} EVID 0 (a measurement) but no DV. Set EVID 2 for a "
+                    "row that is not a measurement; a value below the limit of quantification "
+                    "is written as the limit, with a censor line (censor <observable> below "
+                    "LLOQ).",
+                )
+    if "SS" in cols:
+        ss = pd.to_numeric(df["SS"], errors="coerce").fillna(0)
+        r = np.flatnonzero((ss != 0).to_numpy() & dose)
+        if len(r):
+            add(
+                origin,
+                f"steady-state doses (SS) on {rows_text(r)} are not supported yet. Give the "
+                "dosing history explicitly (ADDL and II before the first measurement), or start "
+                "from a pre-run.",
+            )
+    if "RATE" in cols:
+        rate = pd.to_numeric(df["RATE"], errors="coerce").fillna(0)
+        r = np.flatnonzero((rate < 0).to_numpy() & dose)
+        if len(r):
+            add(
+                origin,
+                f"RATE -1 or -2 (a rate or duration set by the model) on {rows_text(r)} is not "
+                "supported yet. Give the rate (RATE) or the duration (DUR) in the data.",
+            )
+    # times go forward within a unit, in the order of the file
+    groups = (
+        df.groupby(df[unit], sort=False).indices if unit in cols else {None: np.arange(len(df))}
+    )
+    back = []
+    t = time.to_numpy()
+    for idx in groups.values():
+        idx = idx[used[idx] & ~np.isnan(t[idx])]
+        if len(idx) > 1:
+            back += list(idx[1:][np.diff(t[idx]) < 0])
+    if back:
+        add(
+            origin,
+            f"times go back on {rows_text(back)} (earlier than the row before, in the same "
+            "unit). Sort the data by unit, then time.",
+        )
+    dup = np.flatnonzero(df.duplicated(keep="first").to_numpy() & used)
+    if len(dup):
+        warnings.warn(
+            f"the data repeat earlier rows exactly at {rows_text(dup)}; they are read as "
+            "separate records. Remove them if they are copies.",
+            stacklevel=4,
+        )
+
+
+def constant_problems(df, unit, column, what, add, origin) -> None:
+    """A column read once per unit (a dose column, a covariate) has one value per unit."""
+    if column not in df.columns:
+        return
+    keys = df[unit] if unit in df.columns else pd.Series(1, index=df.index)
+    missing = np.flatnonzero(df[column].isna().to_numpy())
+    if len(missing):
+        add(origin, f"{column} ({what}) is missing on {rows_text(missing)}.")
+    changing = [
+        plain_id(k) for k, g in df[column].groupby(keys, sort=False) if g.dropna().nunique() > 1
+    ]
+    if changing:
+        shown = ", ".join(map(str, changing[:5])) + (" ..." if len(changing) > 5 else "")
+        add(
+            origin,
+            f"{column} ({what}) changes within units {shown}; it is read once per unit. "
+            "Values that change with time are not supported yet.",
+        )
+
+
+# ----------------------------------------------------------------------------- building
+@dataclass
+class Plan:
+    """What ``build`` needs from the problem."""
+
+    unit: str | None
+    doses: object  # the _Doses declaration, or None
+    links: list  # (lhs, column, where) of each observe line
+    ignored: list  # (column, where) of each ignore line
+    censors: dict  # lhs key -> limit (a number or a column)
+    covariates: list  # data columns read once per unit
+    reads: dict  # observable -> compartments it reads directly
+
+
+def build(df: pd.DataFrame, plan: Plan, add, origin_of) -> list[Unit]:
+    """The units, in the order they first appear in the data. Problems found while
+    building (TenQSP refusing a dose record, a measurement at a dose time) go to ``add``."""
+    unit = plan.unit
+    keys = df[unit].map(plain_id) if unit else pd.Series(1, index=df.index)
+    order = list(pd.unique(keys[keys.notna()]))
+    time = pd.to_numeric(df["TIME"], errors="coerce").to_numpy(float)
+    regimens = _regimens(df, keys, order, plan, add, origin_of)
+    link_masks = [(lhs, col, link_rows(df, col, where)) for lhs, col, where in plan.links]
+    units = []
+    for k in order:
+        in_unit = (keys == k).to_numpy()
+        observations = {}
+        for lhs, col, mask in link_masks:
+            rows = np.flatnonzero(mask & in_unit)
+            if not len(rows):
+                continue
+            limit = plan.censors.get("".join(lhs.split()))
+            below = None
+            if limit is not None:
+                below = (
+                    np.full(len(rows), float(limit))
+                    if not isinstance(limit, str)
+                    else pd.to_numeric(df[limit], errors="coerce").to_numpy(float)[rows]
+                )
+            sort = np.argsort(time[rows], kind="stable")
+            rows = rows[sort]
+            observations[lhs] = Observations(
+                lhs,
+                time[rows],
+                pd.to_numeric(df[col], errors="coerce").to_numpy(float)[rows],
+                rows + 1,
+                None if below is None else below[sort],
+            )
+        if not observations:
+            continue  # no linked measurement: nothing to fit (reported in the summary)
+        times = np.unique(np.concatenate([o.times for o in observations.values()]))
+        cov = {c: _plain_value(df.loc[in_unit, c].dropna().iloc[0]) for c in plan.covariates}
+        sc = tq.Scenario(name=str(k), regimen=regimens.get(k, tq.Regimen()), times=times)
+        units.append(Unit(k, sc, observations, cov))
+        _dose_time_problems(df, units[-1], in_unit, time, plan, add, origin_of)
+    return units
+
+
+def _plain_value(v):
+    v = plain_id(v)
+    return float(v) if isinstance(v, int) else v
+
+
+def _regimens(df, keys, order, plan, add, origin_of) -> dict:
+    d = plan.doses
+    if d is None:
+        return {}
+    if d.column is not None:
+        out = {}
+        for k in order:
+            amount = df.loc[(keys == k).to_numpy(), d.column].dropna()
+            if len(amount):
+                out[k] = tq.bolus(d.into, float(amount.iloc[0]), times=[d.at])
+        return out
+    rows = D.dose_rows(df)
+    if not rows.any():
+        return {}
+    table = df.loc[rows, [c for c in _DOSE_COLUMNS if c in df.columns]].copy()
+    table.insert(0, "ID", keys[rows].to_numpy())
+    if d.into is not None:
+        table["CMT"] = d.into
+        targets = None
+    else:
+        table["CMT"] = df.loc[rows, "CMT"].map(plain_id).to_numpy()
+        targets = d.cmt
+    try:
+        return {plain_id(k): r for k, r in tq.regimens_from_table(table, targets=targets).items()}
+    except ValueError as e:  # TenQSP refuses a record: say so, do not read it differently
+        add(origin_of("doses"), f"TenQSP cannot read the dose records: {e}")
+        return {}
+
+
+def _dose_time_problems(df, u: Unit, in_unit, time, plan, add, origin_of) -> None:
+    """A measurement at the time of a dose into a compartment it reads directly: TenQSP gives
+    the value just after the dose, NONMEM the value just before when the measurement row
+    comes first. Unambiguous only when the dose row comes first in the file."""
+    doses = [
+        (e["time"] if e["kind"] == "bolus" else e["start"], e["target"])
+        for e in u.scenario.regimen.to_list()
+    ]
+    if not doses:
+        return
+    dose_rows = np.flatnonzero(D.dose_rows(df) & in_unit) if plan.doses.column is None else []
+    clash = []
+    for lhs, o in u.observations.items():
+        reads = set().union(*(plan.reads.get(n, set()) for n in tq.formula(lhs).names))
+        for t_dose, target in doses:
+            if target not in reads:
+                continue
+            for r, t in zip(o.rows - 1, o.times, strict=True):
+                if t != t_dose:
+                    continue
+                before = [x for x in dose_rows if time[x] == t and x < r]
+                if not before:
+                    clash.append((r, t, target, lhs))
+    if clash:
+        r, t, target, lhs = clash[0]
+        add(
+            origin_of("data"),
+            f"{rows_text(sorted({c[0] for c in clash}))}: a measurement of {lhs} at the time of "
+            f"a dose into {target} (first: t={D.value_text(t)}, unit {u.id}), which {lhs} reads "
+            "directly. TenQSP gives the value just after the dose; NONMEM reads a measurement "
+            "recorded before the dose (or at a dose time set by ADDL) as the value just before "
+            "it. Values just before a dose are not supported yet: if these are pre-dose "
+            "samples, give them a time just before the dose; if they are after the dose, put "
+            "the dose row first.",
+        )
+
+
+# ----------------------------------------------------------------------------- shapes
+def shape_of(u: Unit, outputs: tuple[str, ...]) -> tuple:
+    """What fixes a build of the derivative function: the doses (kind and place, in time
+    order), the number of output times, and the outputs."""
+    events = sorted(
+        u.scenario.regimen.to_list(),
+        key=lambda e: e["time"] if e["kind"] == "bolus" else e["start"],
+    )
+    return (tuple((e["kind"], e["target"]) for e in events), len(u.scenario.times), outputs)
+
+
+def shapes(units: list[Unit], outputs: tuple[str, ...]) -> dict[tuple, list]:
+    """Units grouped by shape, in the order the shapes first appear: {shape: [unit ids]}."""
+    out: dict[tuple, list] = {}
+    for u in units:
+        out.setdefault(shape_of(u, outputs), []).append(u.id)
+    return out
+
+
+def shape_text(shape: tuple) -> str:
+    events, n_times, _ = shape
+    counts: dict[tuple, int] = {}
+    for e in events:
+        counts[e] = counts.get(e, 0) + 1
+    doses = ", ".join(
+        f"{n} {kind}{'es' if kind == 'bolus' and n != 1 else 's' if n != 1 else ''} into {target}"
+        for (kind, target), n in counts.items()
+    )
+    return f"{doses or 'no doses'}, {n_times} times"

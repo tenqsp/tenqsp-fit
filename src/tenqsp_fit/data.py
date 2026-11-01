@@ -6,6 +6,8 @@ row conditions (``where DVID == 1``)."""
 from __future__ import annotations
 
 import ast
+import hashlib
+import io
 from pathlib import Path
 
 import numpy as np
@@ -17,11 +19,17 @@ from .errors import nearest
 STANDARD = ("ID", "TIME", "DV", "AMT", "EVID", "MDV", "CMT", "DVID", "RATE", "II", "ADDL", "SS")
 
 
-def read_table(source, base: Path | None = None) -> pd.DataFrame:
+def read_table(source, base: Path | None = None) -> tuple[pd.DataFrame, str, str | None]:
     """A table from a CSV file (comma, tab or space separated; ``.`` is a missing value, as in
-    NONMEM) or a pandas DataFrame (copied)."""
+    NONMEM) or a pandas DataFrame (copied), with the SHA-256 of what was read (the file's
+    bytes, or the table's contents) and the file's full path (None for a DataFrame). Spaces
+    around column names and values are dropped; rows are counted from 1 after the header."""
     if isinstance(source, pd.DataFrame):
-        return source.copy()
+        df = source.copy().reset_index(drop=True)
+        df.columns = [str(c).strip() for c in df.columns]
+        h = hashlib.sha256(",".join(map(str, df.columns)).encode())
+        h.update(pd.util.hash_pandas_object(df, index=False).to_numpy().tobytes())
+        return df, h.hexdigest(), None
     if not isinstance(source, str | Path):
         raise TypeError(
             f"data: give a file name or a pandas DataFrame, not {type(source).__name__}."
@@ -31,7 +39,12 @@ def read_table(source, base: Path | None = None) -> pd.DataFrame:
         path = base / path
     if not path.exists():
         raise ValueError(f"data: no file '{path}'.")
-    return pd.read_csv(path, sep=None, engine="python", na_values=["."])
+    raw = path.read_bytes()
+    df = pd.read_csv(
+        io.BytesIO(raw), sep=None, engine="python", na_values=["."], skipinitialspace=True
+    )
+    df.columns = [str(c).strip() for c in df.columns]
+    return df, hashlib.sha256(raw).hexdigest(), str(path.resolve())
 
 
 def apply_map(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
