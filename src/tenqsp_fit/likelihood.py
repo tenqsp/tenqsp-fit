@@ -13,6 +13,12 @@ measurement adds
 - for a censored link and ``DV`` at or below the limit (M3, Beal 2001):
   ``-2 log Phi((limit - f)/sd)``, the probability that the value is below the limit.
 
+So -2LL = sum over measured values of ``((DV - f)/sd)^2 + 2 log(sd)``, plus
+``n log(2 pi)`` with ``n`` the number of measured (not censored) values, plus the M3 terms.
+``n log(2 pi)`` is a constant of the data: it does not depend on the parameters, so it changes
+no estimate, standard error or likelihood-ratio test on the same data. Monolix reports -2LL
+with it; NONMEM's objective function value (OFV) leaves it out: OFV = -2LL - n log(2 pi).
+
 **Predictions near zero** (PRD F2.7). A population driven extinct, or solver round-off below
 ``atol`` (which can be slightly negative), would make ``log10(bact)`` NaN or minus infinity.
 Inside a transformed link the observables are taken through the smooth floor
