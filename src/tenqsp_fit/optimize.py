@@ -57,22 +57,36 @@ TOL = 1e-8  # Levenberg-Marquardt's rtol and atol (changes of the parameters and
 
 
 # ----------------------------------------------------------------------------- scales
-def scales(names, x0, bounds) -> list[tuple]:
+def scales(names, x0, bounds, kinds=None) -> list[tuple]:
     """The scale of each quantity: ("logit", lo, hi), ("above", lo), ("below", hi), ("log",)
-    or ("as is",)."""
+    or ("as is",). ``kinds`` (one per quantity, or None): the scale a distribution's family
+    sets ("log" or "as is"); without one, a start above 0 gives the log scale."""
     out = []
-    for x, (lo, hi) in zip(x0, bounds, strict=True):
+    kinds = kinds or [None] * len(names)
+    for x, (lo, hi), kind in zip(x0, bounds, kinds, strict=True):
         if np.isfinite(lo) and np.isfinite(hi):
             out.append(("logit", lo, hi))
         elif np.isfinite(lo):
             out.append(("above", lo))
         elif np.isfinite(hi):
             out.append(("below", hi))
+        elif kind is not None:
+            out.append((kind,))
         elif x > 0:
             out.append(("log",))
         else:
             out.append(("as is",))
     return out
+
+
+def user_bounds(problem, names):
+    """The bounds written with ``in (lo, hi)`` (the near-bound warning's), not the natural
+    range of a quantity (a logitnormal's (0, 1), a correlation's (-1, 1))."""
+    from .problem import _Estimate
+
+    written = {d.name: d.bounds for d in problem._params
+               if isinstance(d, _Estimate) and d.bounds and d.written is None}  # fmt: skip
+    return [written.get(n, (-np.inf, np.inf)) for n in names]
 
 
 def to_x(u, sc):
@@ -388,7 +402,7 @@ class Result:
 def fit_optimize(problem, obj, *, progress=None) -> Result:
     opts = problem._options
     names, x0 = obj.names, np.asarray(obj.x0, float)
-    sc = scales(names, x0, obj.bounds)
+    sc = scales(names, x0, obj.bounds, obj.kinds)
     n_starts = int(opts.get("starts", 1))
     rng = np.random.default_rng(int(opts.get("seed", 0)))
     maxiter = int(opts.get("maxiter") or DEFAULT_MAXITER)
@@ -446,7 +460,8 @@ def fit_optimize(problem, obj, *, progress=None) -> Result:
         cov = covariance(None, to_u(run.X[best], sc), sc,
                          gradient=lambda u: gradient(jnp.asarray(u)))  # fmt: skip
     return finish(problem, obj, "optimize", "Levenberg-Marquardt" if least_squares else "BFGS",
-                  names, x0, sc, U_start, run, final, redrawn, obj.bounds, t_start,
+                  names, x0, sc, U_start, run, final, redrawn, user_bounds(problem, names),
+                  t_start,
                   **cov)  # fmt: skip
 
 
@@ -537,7 +552,7 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
 
 
 def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, redrawn,
-           user_bounds, t_start, **extra) -> Result:  # fmt: skip
+           bounds_written, t_start, **extra) -> Result:  # fmt: skip
     """The result from the runs: the best start, the table of starts, the trace."""
     X, steps, done, status, n = run.X, run.steps, run.done, run.status, len(U_start)
     start_status = []
@@ -576,7 +591,7 @@ def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, 
         failed_runs=int(run.failed.sum()),
         n_observations=obj.n_observations,
         seconds=time.perf_counter() - t_start,
-        near_bounds=near_bounds(names, X[best], user_bounds),
+        near_bounds=near_bounds(names, X[best], bounds_written),
         **extra,
     )
     warn_near_bounds(result)

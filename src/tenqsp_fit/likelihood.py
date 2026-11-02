@@ -84,6 +84,7 @@ class Objective:
         starts = {d.name: d.start for d in params if isinstance(d, _Estimate)}
         _, self.x0, bounds = problem._starts()
         self.bounds = tuple(bounds)
+        self.kinds = problem._kinds(self.names)
         defined = {d.name: d.formula for d in problem._defines}
         vary = {d.name for d in varying}
         wrt = [n for n in m.params if (n in starts) or (n in defined) or (n in vary)]

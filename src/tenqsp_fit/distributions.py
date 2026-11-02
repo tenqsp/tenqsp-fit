@@ -107,6 +107,8 @@ _LATER = {
     "stays in (0, 1)",
     "uniform": "uniform is a prior, not a distribution between units",
 }
+# a spread of 0 means "does not vary" (estimate x ~ normal(mean=0.75, sd=0))
+SPREADS = ("sd", "var", "cv", "sdlog", "sdlogit")
 _POSITIVE = {
     "sd", "var", "cv", "sdlog", "sdlogit", "rate", "shape", "scale", "alpha", "beta",
     "concentration",
@@ -178,6 +180,8 @@ def _formula_text(v, what: str) -> str:
 
 
 def _check(name: str, key: str, v: float) -> None:
+    if name in BETWEEN_UNITS and key in SPREADS and v == 0:
+        return  # does not vary
     if key in _POSITIVE and not v > 0:
         raise ValueError(f"{name}: '{key}' must be > 0 (got {_num(v)}).")
     if name in ("lognormal", "exponential") and key in ("mean", "median") and not v > 0:

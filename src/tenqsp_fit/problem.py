@@ -9,6 +9,7 @@ written in Python prints as text (``to_text``) and reads back to the same proble
 from __future__ import annotations
 
 import keyword
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,7 @@ from .distributions import (
     _LATER,
     BETWEEN_UNITS,
     ERROR_FORMS,
+    SPREADS,
     Distribution,
     ErrorModel,
     Fixed,
@@ -94,6 +96,42 @@ class _Estimate(_Decl):
     start: float | None = None
     bounds: tuple[float, float] | None = None
     dist: Distribution | None = None
+    written: Distribution | None = None  # a distribution with spread 0: does not vary
+    kind: str | None = None  # its scale, set by the family: "log" or "as is"
+
+
+def _spread_zero(dist: Distribution) -> bool:
+    """A distribution whose spread is 0 (or fix(0)): the quantity does not vary."""
+    for k, v in dist.args:
+        if k in SPREADS:
+            num = v.value if isinstance(v, Fixed) else v
+            return isinstance(num, float) and num == 0
+    return False
+
+
+def _not_varying(name: str, dist: Distribution) -> _Estimate:
+    """``estimate x ~ family(location, spread=0)``: one value for all units, estimated on the
+    family's scale (normal: any sign; lognormal: log scale; logitnormal: within (0, 1))."""
+    args = dict(dist.args)
+    key, loc = dist.args[0]
+    if isinstance(loc, str):
+        raise ValueError(
+            f"estimate {name}: {name} does not vary (spread 0) and its {key} is a formula; "
+            f"write it as a formula: {name} = {loc}"
+        )
+    if isinstance(loc, Fixed):
+        raise ValueError(
+            f"estimate {name}: {name} does not vary (spread 0) and its {key} is fixed; write "
+            f"fix {name} = {_num(loc.value)}"
+        )
+    if dist.name == "normal":
+        return _Estimate(name, start=loc, written=dist, kind="as is")
+    if dist.name == "lognormal":
+        start = math.exp(loc) if key == "meanlog" else loc  # spread 0: mean = median
+        return _Estimate(name, start=start, written=dist, kind="log")
+    if dist.name == "logitnormal":
+        return _Estimate(name, start=loc, bounds=(0.0, 1.0), written=dist)
+    raise AssertionError(args)  # pragma: no cover
 
 
 @dataclass
@@ -365,7 +403,10 @@ class Problem:
                 )
             if value.name not in BETWEEN_UNITS:
                 raise ValueError(f"estimate {name}: {_LATER[value.name]}.")
-            self._params.append(_Estimate(name, dist=value))
+            if _spread_zero(value):
+                self._params.append(_not_varying(name, value))
+            else:
+                self._params.append(_Estimate(name, dist=value))
             return
         if isinstance(value, Fixed):
             raise TypeError(f"estimate {name}: a fixed value is written fix {name} = value.")
@@ -515,6 +556,9 @@ class Problem:
         for _, v in dist.args:
             if isinstance(v, str):
                 raise ValueError(f"prior {name}: the arguments of a prior are numbers.")
+        for k, v in dist.args:
+            if k in SPREADS and (v.value if isinstance(v, Fixed) else v) == 0:
+                raise ValueError(f"prior {name}: '{k}' must be > 0 (a prior needs a spread).")
         if any(p.name == name for p in self._priors):
             raise ValueError(f"prior {name}: given twice.")
         self._priors.append(_Prior(name, dist))
@@ -825,6 +869,38 @@ class Problem:
                     start[f"{e.lhs}.{q}"] = float(a)
         x0 = np.array([start[n] for n in names], dtype=float)
         return names, x0, [bounds.get(n, (-np.inf, np.inf)) for n in names]
+
+    def _kinds(self, names) -> list[str | None]:
+        """The scale each family sets ("log", "as is"), or None (by the start's sign): a
+        normal's mean and a lognormal's meanlog take any sign; a distribution with spread 0
+        sets its quantity's scale."""
+        kinds = {}
+        for d in self._params:
+            if isinstance(d, _Estimate) and d.kind is not None:
+                kinds[d.name] = d.kind
+            elif isinstance(d, _Estimate) and d.dist is not None:
+                for k, _ in d.dist.args:
+                    if (d.dist.name, k) in (("normal", "mean"), ("lognormal", "meanlog")):
+                        kinds[f"{d.name}.{k}"] = "as is"
+        return [kinds.get(n) for n in names]
+
+    def _one_value_lines(self) -> list[str]:
+        """Each quantity that does not vary, in the long form (its family, spread 0): the
+        scale it is estimated on is never hidden."""
+        out = []
+        for d in self._params:
+            if not isinstance(d, _Estimate) or d.dist is not None:
+                continue
+            if d.written is not None:
+                out.append(f"{d.name} ~ {d.written}")
+            elif d.bounds is not None:
+                lo, hi = d.bounds
+                out.append(f"{d.name} = {_num(d.start)} in ({_num(lo)}, {_num(hi)})")
+            elif d.start > 0:
+                out.append(f"{d.name} ~ lognormal(median={_num(d.start)}, sdlog=0)")
+            else:
+                out.append(f"{d.name} ~ normal(mean={_num(d.start)}, sd=0)")
+        return out
 
     def _covariates(self) -> list[str]:
         """Data columns the fit's formulas use (read once per unit)."""
@@ -1251,7 +1327,9 @@ class Problem:
             from .optimize import scale_text, scales
 
             names, x0, bounds = self._starts()
-            row("scales", scale_text(names, scales(names, x0, bounds)))
+            row("scales", scale_text(names, scales(names, x0, bounds, self._kinds(names))))
+            for i, line in enumerate(self._one_value_lines()):
+                row("one value" if i == 0 else "", line)
         fixed = [f"{d.name}={_num(d.value)}" for d in self._params if isinstance(d, _Fix)]
         fixed += [
             f"{d.name}.{k}={_num(v.value)}"
@@ -1341,11 +1419,13 @@ class Problem:
                 lines.append(f"ignore {x.column} where {x.where}")
         if self._links or self._data is not None:
             lines.append("")
+        for d in self._defines:  # formulas first (NONMEM's $PK), then what they use
+            lines.append(f"{d.name} = {d.formula}")
         for d in self._params:
             if isinstance(d, _Fix):
                 lines.append(f"fix {d.name} = {_num(d.value)}")
-            elif d.dist is not None:
-                lines.append(f"estimate {d.name} ~ {d.dist}")
+            elif d.dist is not None or d.written is not None:
+                lines.append(f"estimate {d.name} ~ {d.dist or d.written}")
             else:
                 b = f" in ({_num(d.bounds[0])}, {_num(d.bounds[1])})" if d.bounds else ""
                 lines.append(f"estimate {d.name} = {_num(d.start)}{b}")
@@ -1355,8 +1435,6 @@ class Problem:
                 + ", ".join(c.names)
                 + (f" = {_num(c.start)}" if c.start is not None else "")
             )
-        for d in self._defines:
-            lines.append(f"{d.name} = {d.formula}")
         for e in self._errors:
             lines.append(f"error {e.lhs} ~ {e.model}")
         for lk in self._likelihoods:

@@ -446,3 +446,52 @@ def test_no_fit_line():
 def test_model_statement_after_fit():
     with pytest.raises(tf.FitTextError, match="the model goes above it"):
         tf.Problem.from_text(PK + "fit x\nparam z = 1\n")
+
+
+def test_spread_zero_means_one_value(folder, monkeypatch):
+    """A distribution with spread 0 does not vary: one estimated value, on the scale its
+    family sets (normal: any sign, even from a start above 0; lognormal: log scale;
+    logitnormal: within (0, 1)); formulas come first in the text."""
+    monkeypatch.chdir(folder)
+    text = PK.replace("param ka=1.6", "param F=0.5, ka=1.6") + (
+        'fit cov\ndata "pk.csv"\nunit ID\ndoses into depot\nobserve conc = DV\n'
+        "CL = CL_std*(WT/70)^beta\n"
+        "estimate ka ~ lognormal(median=1.5, sdlog=0.5)\n"
+        "estimate CL_std ~ lognormal(median=0.04, sdlog=0.3)\n"
+        "estimate beta ~ normal(mean=0.75, sd=0)\n"
+        "estimate ke ~ lognormal(median=0.08, sdlog=fix(0))\n"
+        "estimate F ~ logitnormal(median=0.5, sdlogit=0)\n"
+        "error conc ~ additive(0.7)\nmethod laplace\n"
+    )
+    p = tf.Problem.from_text(text)
+    assert [d.name for d in p._varying()] == ["ka", "CL_std"]
+    names = p.estimated()
+    assert {"beta", "ke", "F"} <= set(names) and "beta.mean" not in names
+    from tenqsp_fit.optimize import scales
+
+    names, x0, bounds = p._starts()
+    sc = dict(zip(names, scales(names, x0, bounds, p._kinds(names)), strict=True))
+    assert sc["beta"] == ("as is",) and sc["ke"] == ("log",) and sc["F"][0] == "logit"
+    s = p.summary()
+    assert "one value  beta ~ normal(mean=0.75, sd=0)" in s
+    assert "ke ~ lognormal(median=0.08, sdlog=fix(0))" in s
+    out = p.to_text()
+    assert out.index("CL = CL_std*(WT/70)^beta") < out.index("estimate ka")
+    assert "estimate beta ~ normal(mean=0.75, sd=0)" in out
+    q = tf.Problem.from_text(p.to_text(model=True))
+    assert p == q and q.to_text() == out
+    # the shorthand shows its long form
+    p2 = tf.Problem.from_text(PK + FIT.replace("pk.csv", str(folder / "pk.csv")))
+    assert "one value  ke ~ lognormal(median=0.08, sdlog=0)" in p2.summary()
+
+
+def test_spread_zero_needs_a_number(folder):
+    p = tf.Problem.from_text(PK + FIT.replace("pk.csv", str(folder / "pk.csv")))
+    with pytest.raises(ValueError, match="does not vary .* write it as a formula: V = V0"):
+        p.estimate("V", tf.lognormal(median="V0*(WT/70)", sdlog=0))
+    with pytest.raises(ValueError, match="its median is fixed; write fix V = 2"):
+        p.estimate("V", tf.lognormal(median=tf.fix(2), sdlog=0))
+    with pytest.raises(ValueError, match="'shape' must be > 0"):
+        tf.weibull(shape=0, scale=1)  # no spread to set to 0: it always varies
+    with pytest.raises(ValueError, match="'sd' must be > 0"):
+        p.prior("ke", tf.normal(mean=0.08, sd=0))  # a prior needs a spread

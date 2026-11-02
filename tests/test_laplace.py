@@ -274,3 +274,22 @@ def test_ctrl_c_keeps_the_work_with_laplace(tmp_path, monkeypatch):
     assert len(r.trace) >= 2 and np.isfinite(r.m2ll)
     assert np.isnan(r.se).all() and r.covariance_status == O.STOPPED_SE
     assert r.individual().shape[0] == 8  # the units' values at the point reached
+
+
+def test_a_coefficient_that_does_not_vary_takes_any_sign(tmp_path):
+    """beta ~ normal(mean=0.5, sd=0): one value, estimated as it is (not on the log scale,
+    though its start is above 0), with the covariate formula written first. It reaches the
+    fit started from 0, whatever the sign of the answer."""
+    head = "A = A_ref*(WT/70)^beta\nestimate A_ref ~ normal(mean=8, sd=1)\n"
+    tail = "estimate B ~ normal(mean=0.5, sd=1)\nestimate k = 0.2\n"
+    one = "estimate beta ~ normal(mean=0.5, sd=0)\n"
+    r1 = tf.fit(lin_problem(tmp_path, correlate=False, estimate=head + one + tail))
+    zero = "estimate beta = 0\n"
+    r0 = tf.fit(lin_problem(tmp_path, correlate=False, estimate=head + zero + tail))
+    assert r1.status == r0.status == "converged"
+    i = list(r1.names).index("beta")
+    assert r1.scales[i] == ("as is",) and "beta" in r1.table().quantity.to_list()
+    assert abs(r1.m2ll - r0.m2ll) < 1e-4
+    assert abs(r1.estimates["beta"] - r0.estimates["beta"]) < 1e-3
+    ind = r1.individual()
+    assert {"A_ref", "A"} <= set(ind.columns)

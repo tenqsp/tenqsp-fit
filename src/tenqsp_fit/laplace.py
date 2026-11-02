@@ -71,6 +71,7 @@ from .optimize import (
     scales,
     to_u,
     to_x,
+    user_bounds,
 )
 
 __all__ = ["Laplace"]
@@ -105,6 +106,7 @@ class Laplace:
         self.names = cond.names
         self.x0 = cond.x0
         self.bounds = cond.bounds
+        self.kinds = cond.kinds
         self.units = cond.units
         self.n_observations = cond.n_observations
         self.n_censored = cond.n_censored
@@ -322,8 +324,8 @@ class Laplace:
 def fit_laplace(problem, obj: Laplace, *, progress=None):
     opts = problem._options
     names, x0 = obj.names, np.asarray(obj.x0, float)
-    sc = scales(names, x0, obj.bounds)
-    user_bounds = _user_bounds(problem, names)
+    sc = scales(names, x0, obj.bounds, obj.kinds)
+    bounds_written = user_bounds(problem, names)
     n_starts = int(opts.get("starts", 1))
     rng = np.random.default_rng(int(opts.get("seed", 0)))
     maxiter = int(opts.get("maxiter") or DEFAULT_MAXITER)
@@ -432,16 +434,9 @@ def fit_laplace(problem, obj: Laplace, *, progress=None):
     shrink = {name: float(1.0 - np.std(Z[:, k], ddof=1)) if obj.n > 1 else float("nan")
               for k, (name, _) in enumerate(obj.varying)}  # fmt: skip
     return finish(problem, obj, "laplace", "BFGS, FOCE-I", names, x0, sc, U_start, run_, final,
-                  redrawn, user_bounds, t_start, modes=Z, shrinkage=shrink, objective=obj,
+                  redrawn, bounds_written, t_start, modes=Z, shrinkage=shrink, objective=obj,
                   notes=[m for m in messages if m], **cov)  # fmt: skip
 
 
 class _Stopped(Exception):
     pass
-
-
-def _user_bounds(problem, names):
-    from .problem import _Estimate
-
-    written = {d.name: d.bounds for d in problem._params if isinstance(d, _Estimate) and d.bounds}
-    return [written.get(n, (-np.inf, np.inf)) for n in names]
