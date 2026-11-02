@@ -170,7 +170,9 @@ class Objective:
         if opts.get("atol") is not None:
             sim_opts["atol"] = float(opts["atol"])
         sim = problem.model.simulator(outputs=list(outputs), **sim_opts)
-        self._fs = sim.function(scenarios, wrt=list(wrt) or [next(iter(m.params))])
+        self._sim, self._scenarios, self._units = sim, scenarios, units
+        self._wrt_arg = list(wrt) or [next(iter(m.params))]
+        self._fs = sim.function(scenarios, wrt=self._wrt_arg)
         if not wrt:  # nothing reaches the model: still one function, at its own values
             self._model_params = lambda x, Z=None: jnp.asarray(self._fs.x0)
 
@@ -262,6 +264,25 @@ class Objective:
             pred = lk["fn"](*vals)  # (units, times)
             safe = jnp.where(jnp.asarray(self._fs.mask), pred, 0.0)
             result[lk["lhs"]] = jnp.take_along_axis(safe, lk["idx"], axis=1)
+        return result
+
+    def curves(self, x, times, Z=None) -> dict:
+        """Each link's prediction at ``times`` (one grid, the same for every unit), for
+        every unit: ``{lhs: (units, times)}``, on the link's scale; ``Z``: the units' normal
+        scores (None: the typical unit, scores 0). One more build of the model (the times
+        are new)."""
+        times = tuple(float(t) for t in np.asarray(times))
+        fs = self._sim.function([s.replace(times=times) for s in self._scenarios],
+                                wrt=self._wrt_arg)  # fmt: skip
+        x = jnp.asarray(x, dtype=jnp.float64)
+        P = self._model_params(x, None if Z is None else jnp.asarray(Z))
+        out = fs(P)
+        result = {}
+        for lk in self._links:
+            vals = [out[n] for n in lk["names"]]
+            if lk["transformed"]:
+                vals = [_floor(v, self.floor) for v in vals]
+            result[lk["lhs"]] = np.asarray(lk["fn"](*vals))
         return result
 
     def _sd(self, lk, x, f):

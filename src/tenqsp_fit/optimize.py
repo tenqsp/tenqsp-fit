@@ -187,11 +187,14 @@ FD_STEP = 1e-3  # central differences for the standard errors, on the estimation
 STOPPED_SE = "not computed: the fit was stopped before it converged"
 
 
-def no_covariance(p: int) -> dict:
+NOT_ASKED = "not computed (not asked for)"
+
+
+def no_covariance(p: int, status: str | None = None) -> dict:
     """No standard errors (a stopped fit: the Hessian away from the minimum means nothing)."""
     nan = np.full((p, p), np.nan)
     return dict(se=np.full(p, np.nan), ci=np.full((p, 2), np.nan), cov_u=nan, cov=nan,
-                covariance_status=STOPPED_SE, hessian_u=nan)  # fmt: skip
+                covariance_status=status or STOPPED_SE, hessian_u=nan)  # fmt: skip
 
 
 def covariance(value, u, sc, *, gradient=None) -> dict:
@@ -258,7 +261,9 @@ class Result:
     ``result.table()`` (estimates, standard errors, RSE %, 95 % intervals), ``result.se``,
     ``result.cov`` (covariance of the estimates), ``result.starts`` (each start's values,
     its end, -2LL, steps, status), ``result.trace`` (every step of every start),
-    ``result.plot_trace()``, ``result.plot_waterfall()``. With parameters that vary between
+    ``result.plot_trace()``, ``result.plot_waterfall()``; ``result.tables()`` (NONMEM's
+    sdtab and patab), ``result.plot_gof()``, ``result.plot_individual()``, ``result.vpc()``,
+    ``result.profile(name)``, ``result.save(folder)``. With parameters that vary between
     units (method laplace), also ``result.individual()`` (each unit's scores and values) and
     ``result.shrinkage``. ``print`` shows the table."""
 
@@ -359,9 +364,61 @@ class Result:
         if self.method != "laplace":
             raise ValueError(
                 "individual values are for parameters that vary between units (method "
-                "laplace); here one set of values fits every unit."
+                "laplace); here one set of values fits every unit (result.tables() has each "
+                "unit's values and covariates)."
             )
         return self.objective.individual(self.x, self.modes)
+
+    def tables(self, folder=None) -> dict:
+        """NONMEM-style tables: ``{"sdtab": per measurement (DV, PRED, IPRED, IWRES,
+        censoring), "patab": per unit (scores, values, covariates)}``; with a ``folder``, also
+        written there as CSV."""
+        from . import results
+
+        if folder is not None:
+            return results.write_tables(self, folder)
+        return {"sdtab": results.sdtab(self), "patab": results.patab(self)}
+
+    def plot_gof(self):
+        """Goodness of fit: DV against PRED and IPRED, IWRES against time and IPRED, one row
+        per link. Returns the figure."""
+        from .results import plot_gof
+
+        return plot_gof(self)
+
+    def plot_individual(self, units=None, *, ncols: int = 4):
+        """Each unit's measurements with its own curve (and the typical unit's, dashed);
+        ``units``: a list of unit ids (default: all). Returns the figure."""
+        from .results import plot_individual
+
+        return plot_individual(self, units, ncols=ncols)
+
+    def vpc(self, *, n: int = 200, seed: int = 0, bins: int | None = None,
+            percentiles=(5, 50, 95), interval: float = 0.95, log: bool = False):  # fmt: skip
+        """Visual predictive check: the data simulated ``n`` times from the fit with the
+        same design (new units each time); the data's percentiles over time against the
+        simulated ones' ``interval``. Returns a ``VPC`` (``.table``, ``.figure``)."""
+        from .results import vpc
+
+        return vpc(self, n=n, seed=seed, bins=bins, percentiles=percentiles,
+                   interval=interval, log=log)  # fmt: skip
+
+    def profile(self, name: str, *, points: int = 8, step: float | None = None,
+                level: float = 0.95):  # fmt: skip
+        """Profile likelihood of one estimated quantity: held at values on each side of its
+        estimate, the others refitted. Returns a ``Profile`` (``.table``, ``.interval``,
+        ``.plot()``)."""
+        from .results import profile
+
+        return profile(self, name, points=points, step=step, level=level)
+
+    def save(self, folder):
+        """Write everything to ``folder``: the problem text, the data, estimates, starts,
+        trace, sdtab and patab, the printed result, plots, and ``run.json`` (versions,
+        hashes, options) to reproduce it. Returns the folder."""
+        from .results import save
+
+        return save(self, folder)
 
     @property
     def reached(self) -> int:
@@ -399,7 +456,7 @@ class Result:
 
 
 # ----------------------------------------------------------------------------- the fit
-def fit_optimize(problem, obj, *, progress=None) -> Result:
+def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
     opts = problem._options
     names, x0 = obj.names, np.asarray(obj.x0, float)
     sc = scales(names, x0, obj.bounds, obj.kinds)
@@ -428,16 +485,32 @@ def fit_optimize(problem, obj, *, progress=None) -> Result:
         solver, fn = optx.BFGS(rtol=TOL, atol=TOL), value
     tags = frozenset()
     f_struct, aux_struct = jax.eval_shape(lambda u: fn(u), jnp.asarray(to_u(x0, sc)))
-    runs = eqx.filter_jit(lambda u: fn(u)[1])
-    init = eqx.filter_jit(lambda u: solver.init(fn, u, None, {}, f_struct, aux_struct, tags))
-    term = eqx.filter_jit(lambda u, st: solver.terminate(fn, u, None, {}, st, tags)[0])
+    # jax.jit, not eqx.filter_jit: filter_jit keeps every compiled function of every fit
+    # (about 760 memory maps each; Linux allows 65530 per process, so a long session or a
+    # profile ran out). The solver's state holds a traced function besides arrays, so its
+    # fixed part is kept here and only its arrays pass through jit.
+    u_shape = jnp.asarray(to_u(x0, sc))
+    shapes = eqx.filter_eval_shape(
+        lambda u: solver.init(fn, u, None, {}, f_struct, aux_struct, tags), u_shape
+    )
+    _, static = eqx.partition(shapes, lambda v: isinstance(v, jax.ShapeDtypeStruct))
 
-    @eqx.filter_jit
-    def step(u, state):
+    def arrays(state):
+        return eqx.partition(state, eqx.is_array)[0]
+
+    runs = jax.jit(lambda u: fn(u)[1])
+    init = jax.jit(lambda u: arrays(solver.init(fn, u, None, {}, f_struct, aux_struct, tags)))
+    term = jax.jit(
+        lambda u, st: solver.terminate(fn, u, None, {}, eqx.combine(st, static), tags)[0]
+    )
+
+    @jax.jit
+    def step(u, st):
+        state = eqx.combine(st, static)
         u2, state2, ok = solver.step(fn, u, None, {}, state, tags)
         done = solver.terminate(fn, u2, None, {}, state2, tags)[0]
         f = 2.0 * state2.f_info.as_min() if least_squares else state2.f_info.f
-        return u2, state2, done, ok, f
+        return u2, arrays(state2), done, ok, f
 
     workers = ThreadPoolExecutor(max_workers=max(1, min(n_starts, os.cpu_count() or 1)))
     U_start, redrawn = draw_starts(problem, runs, x0, sc, rng, n_starts, workers)
@@ -453,15 +526,15 @@ def fit_optimize(problem, obj, *, progress=None) -> Result:
                      "optimize", const, problem.name, obj)  # fmt: skip
     final = np.array([float(v) for v in ThreadPoolExecutor(len(U_start)).map(obj, list(run.X))])
     best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
-    if run.status == "stopped":
-        cov = no_covariance(len(names))
+    if run.status == "stopped" or not with_se:
+        cov = no_covariance(len(names), None if with_se else NOT_ASKED)
     else:
         gradient = jax.jit(jax.grad(lambda u: obj._minus2ll(to_x(u, sc))))
         cov = covariance(None, to_u(run.X[best], sc), sc,
                          gradient=lambda u: gradient(jnp.asarray(u)))  # fmt: skip
     return finish(problem, obj, "optimize", "Levenberg-Marquardt" if least_squares else "BFGS",
                   names, x0, sc, U_start, run, final, redrawn, user_bounds(problem, names),
-                  t_start,
+                  t_start, objective=obj,
                   **cov)  # fmt: skip
 
 

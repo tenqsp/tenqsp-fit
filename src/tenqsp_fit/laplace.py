@@ -62,6 +62,7 @@ from .live import default_progress
 from .optimize import (
     BAD_VALUE,
     DEFAULT_MAXITER,
+    NOT_ASKED,
     _Progress,
     _Run,
     covariance,
@@ -321,7 +322,7 @@ class Laplace:
 
 
 # ----------------------------------------------------------------------------- the fit
-def fit_laplace(problem, obj: Laplace, *, progress=None):
+def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     opts = problem._options
     names, x0 = obj.names, np.asarray(obj.x0, float)
     sc = scales(names, x0, obj.bounds, obj.kinds)
@@ -420,8 +421,8 @@ def fit_laplace(problem, obj: Laplace, *, progress=None):
     best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
     Z = obj.modes(X[best])
     pool.shutdown()
-    if status == "stopped":
-        cov = no_covariance(p)
+    if status == "stopped" or not with_se:
+        cov = no_covariance(p, None if with_se else NOT_ASKED)
     else:
         cov = covariance(
             None,

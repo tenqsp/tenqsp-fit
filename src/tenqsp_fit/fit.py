@@ -17,6 +17,10 @@ def fit(problem, *, method: str | None = None, progress: str | None = None):
     (``"optimize"``, ``"laplace"``; ``"nuts"`` is not available yet); ``progress``
     (``"text"``, ``"plot"`` or ``"none"``) the problem's ``options progress`` (default: the
     live plot in a notebook, the text elsewhere). Returns a ``Result``."""
+    return _fit(problem, method=method, progress=progress)
+
+
+def _fit(problem, *, method=None, progress=None, with_se: bool = True):
     problem.check()
     name = method or problem._method.name
     if name not in METHODS:
@@ -36,9 +40,9 @@ def fit(problem, *, method: str | None = None, progress: str | None = None):
     if name == "laplace":
         from .laplace import Laplace, fit_laplace
 
-        return fit_laplace(problem, Laplace(problem), progress=progress)
+        return fit_laplace(problem, Laplace(problem), progress=progress, with_se=with_se)
     if name != "optimize":
         raise NotImplementedError(f"method {name} is not available yet.")
     from .optimize import fit_optimize
 
-    return fit_optimize(problem, Objective(problem), progress=progress)
+    return fit_optimize(problem, Objective(problem), progress=progress, with_se=with_se)

@@ -231,3 +231,22 @@ def test_methods_not_yet_and_unknown(tmp_path):
         tf.fit(p, method="nuts")
     with pytest.raises(ValueError, match="unknown method 'optimise'. Did you mean 'optimize'"):
         tf.fit(p, method="optimise")
+
+
+@pytest.mark.skipif(not Path("/proc/self/maps").exists(), reason="Linux /proc only")
+def test_fits_do_not_keep_compiled_code(tmp_path):
+    """Each fit's compiled functions go when the fit does. (equinox's filter_jit kept them:
+    about 2500 memory maps per fit, and a profile ran out of Linux's 65530.)"""
+    import gc
+
+    def maps():
+        with open("/proc/self/maps") as f:
+            return sum(1 for _ in f)
+
+    tf.fit(problem(tmp_path, options="starts=1"))
+    gc.collect()
+    before = maps()
+    for _ in range(3):
+        tf.fit(problem(tmp_path, options="starts=1"))
+        gc.collect()
+    assert maps() - before < 300
