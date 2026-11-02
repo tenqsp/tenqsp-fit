@@ -410,7 +410,9 @@ class Result:
         ``.plot()``)."""
         from .results import profile
 
-        return profile(self, name, points=points, step=step, level=level)
+        prof = profile(self, name, points=points, step=step, level=level)
+        self.__dict__.setdefault("_profiles", {})[name] = prof  # the passport shows its shape
+        return prof
 
     def save(self, folder):
         """Write everything to ``folder``: the problem text, the data, estimates, starts,
@@ -419,6 +421,30 @@ class Result:
         from .results import save
 
         return save(self, folder)
+
+    def doctor(self):
+        """What the fit can and cannot tell (``tenqsp_fit.doctor``): ridges, weakly
+        determined quantities, optima, bounds, shrinkage, the tolerance and gradient checks,
+        jumps in the model. Run by ``tf.fit``; returns a ``Doctor`` (``print`` lists the
+        findings, ``.table()``)."""
+        from .doctor import examine
+
+        if getattr(self, "_doctor", None) is None:
+            self._doctor = examine(self)
+        return self._doctor
+
+    def passport(self):
+        """One document on the fit (``tenqsp_fit.passport``): the run and how to repeat it,
+        each quantity and how well the data determine it, ridges, the doctor's findings, the
+        numerical checks, named predictions, TenQSP's own reports. ``print`` shows it;
+        ``.markdown()``, ``.to_dict()``, ``.save(path)``."""
+        from .passport import passport
+
+        return passport(self)
+
+    def _doctor_lines(self) -> list[str]:
+        d = getattr(self, "_doctor", None)
+        return [] if d is None else ["", repr(d)]
 
     @property
     def reached(self) -> int:
@@ -454,6 +480,8 @@ class Result:
             sh = ", ".join(f"{k} {100 * v:.1f} %" for k, v in self.shrinkage.items())
             lines += ["", f"shrinkage (1 - SD of the units' scores): {sh}"]
         lines += [f"note: {t}" for t in getattr(self, "notes", [])]
+        if getattr(self, "_doctor", None) is not None:  # the doctor reports the bounds
+            return "\n".join(lines + self._doctor_lines())
         lines += ["", *(f"warning: {t}" for t in near_bound_text(self))] if self.near_bounds else []
         return "\n".join(lines)
 

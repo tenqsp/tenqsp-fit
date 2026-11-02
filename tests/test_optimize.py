@@ -92,7 +92,7 @@ def test_bounds_keep_values_inside(tmp_path):
     assert r.estimates["ka"] == pytest.approx(1.3, abs=1e-3)  # the optimum lies above
     assert r.scales[0] == ("logit", 1.0, 1.3)
     assert r.near_bounds == {"ka": ("upper", 1.3)}
-    assert "warning: ka ended at 1.3, near its upper bound 1.3" in repr(r)
+    assert "at a bound: ka ended at 1.3, near its upper bound 1.3" in repr(r)  # the doctor
 
 
 def test_failed_starts_are_drawn_again(tmp_path):

@@ -45,7 +45,8 @@ METHODS = {
 # a method's options with their defaults (printed in the summary)
 METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000}}
 # options with their defaults (printed in the summary; rule: no silent defaults)
-OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None}
+OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None,
+           "checks": "full"}  # fmt: skip
 
 
 class _Text(str):
@@ -586,7 +587,8 @@ class Problem:
 
     def options(self, **options) -> None:
         """Solver and run options: ``rtol``, ``atol``, ``starts`` (multi-start), ``seed``,
-        ``maxiter``, ``progress`` ("text", "plot" or "none")."""
+        ``maxiter``, ``progress`` ("text", "plot" or "none"), ``checks`` ("full", or "quick":
+        the doctor leaves out its tolerance and gradient checks)."""
         for k, v in options.items():
             if k not in OPTIONS:
                 raise TypeError(
@@ -599,6 +601,9 @@ class Problem:
             elif k == "progress":
                 if v not in ("text", "plot", "none"):
                     raise ValueError(f"options: progress is 'text', 'plot' or 'none', got {v!r}.")
+            elif k == "checks":
+                if v not in ("full", "quick"):
+                    raise ValueError(f"options: checks is 'full' or 'quick', got {v!r}.")
             elif not (isinstance(v, int) and not isinstance(v, bool) and v >= (k == "starts")):
                 raise ValueError(f"options: {k} must be a whole number, got {v!r}.")
             if k in self._options:

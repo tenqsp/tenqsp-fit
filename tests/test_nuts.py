@@ -329,3 +329,22 @@ def test_a_study_that_does_not_run_is_left_out(tmp_path):
     assert v.failed == 1 and not v.ran[3] and v.ran.sum() == 19
     assert np.isfinite(v.table["sim p50"]).all()
     assert "1 of 20 studies did not run" in v.figure._suptitle.get_text()
+
+
+@pytest.mark.timeout(1200)
+def test_the_doctor_and_passport_after_nuts(sampled):
+    d = sampled.doctor()
+    found = {f.check: f for f in d.findings}
+    assert {"convergence", "prior and data", "tolerance check", "gradient check"} <= set(found)
+    assert found["tolerance check"].severity == "note"  # rtol 1e-8 is enough here
+    assert found["gradient check"].severity == "note"
+    # the priors (sdlog 0.5) are much wider than what 24 measurements allow: the posterior SD
+    # of each quantity, on the log scale, is a small part of the prior's (0.5)
+    ratio = found["prior and data"].evidence
+    sd = np.log(sampled.draws[["ka", "CL", "ke"]].to_numpy()).std(axis=0, ddof=1)
+    np.testing.assert_allclose([ratio[n] for n in ("ka", "CL", "ke")], sd / 0.5, rtol=0.05)
+    assert max(ratio.values()) < 0.2
+    q = sampled.passport().to_dict()["quantities"]
+    assert [r["quantity"] for r in q] == ["ka", "CL", "ke"]
+    assert all(r["determined"] == "yes" and "lognormal" in r["prior"] for r in q)
+    assert "doctor:" in repr(sampled)

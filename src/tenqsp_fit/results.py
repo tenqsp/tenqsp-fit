@@ -608,16 +608,52 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def save(result, folder) -> Path:
-    """Everything a run gives, in one folder: ``problem.tq`` (model and fit text),
-    ``data.csv`` (the data as read), ``estimates.csv`` (the table), ``starts.csv``,
-    ``trace.csv``, ``sdtab.csv``, ``patab.csv``, ``result.txt`` (as printed), plots (trace,
-    goodness of fit, each unit) and ``run.json`` (versions, hashes of the model, fit and data
-    texts, options, status, -2LL, time)."""
+def run_record(result, text: str | None = None, data_bytes: bytes | None = None) -> dict:
+    """What reproduces a run (PRD F4.7, F11.1): method, status, -2LL, estimates, options, the
+    SHA-256 of the problem text (model and fit) and of the data as read, versions,
+    platform."""
     import tenqsp as tq
 
     from . import __version__
 
+    p = result.problem
+    if text is None:
+        text = p.to_text(model=True)
+    if data_bytes is None:
+        data_bytes = p._data.table.to_csv(index=False).encode() if p._data is not None else b""
+    versions = {"tenqsp_fit": __version__, "tenqsp": tq.__version__, "jax": jax.__version__,
+                "numpy": np.__version__, "pandas": pd.__version__,
+                "python": platform.python_version()}  # fmt: skip
+    try:
+        import scipy
+
+        versions["scipy"] = scipy.__version__
+    except ImportError:  # pragma: no cover
+        pass
+    return {
+        "problem": p.name,
+        "method": result.method,
+        "optimizer": result.optimizer,
+        "status": result.status,
+        "m2ll": result.m2ll,
+        "estimates": result.estimates,
+        "covariance_status": getattr(result, "covariance_status", None),
+        "seconds": round(float(result.seconds), 2),
+        "options": {k: v for k, v in p._options.items()},
+        "method options": dict(p._method.options) if p._method is not None else {},
+        "hashes": {"problem.tq": _sha256(text.encode()), "data.csv": _sha256(data_bytes)},
+        "versions": versions,
+        "platform": f"{platform.system()} {platform.machine()}",
+        "argv": sys.argv[:1],
+    }
+
+
+def save(result, folder) -> Path:
+    """Everything a run gives, in one folder: ``problem.tq`` (model and fit text),
+    ``data.csv`` (the data as read), ``estimates.csv`` (the table), ``starts.csv``,
+    ``trace.csv``, ``sdtab.csv``, ``patab.csv``, ``result.txt`` (as printed), plots (trace,
+    goodness of fit, each unit), ``passport.md`` and ``passport.json``, and ``run.json``
+    (versions, hashes of the model, fit and data texts, options, status, -2LL, time)."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     p = result.problem
@@ -646,31 +682,11 @@ def save(result, folder) -> Path:
         ax = result.plot_waterfall()
         ax.figure.savefig(folder / "waterfall.png", dpi=110)
         plt.close(ax.figure)
-    versions = {"tenqsp_fit": __version__, "tenqsp": tq.__version__, "jax": jax.__version__,
-                "numpy": np.__version__, "pandas": pd.__version__,
-                "python": platform.python_version()}  # fmt: skip
-    try:
-        import scipy
-
-        versions["scipy"] = scipy.__version__
-    except ImportError:  # pragma: no cover
-        pass
-    run = {
-        "problem": p.name,
-        "method": result.method,
-        "optimizer": result.optimizer,
-        "status": result.status,
-        "m2ll": result.m2ll,
-        "estimates": result.estimates,
-        "covariance_status": getattr(result, "covariance_status", None),
-        "seconds": round(float(result.seconds), 2),
-        "options": {k: v for k, v in p._options.items()},
-        "hashes": {"problem.tq": _sha256(text.encode()), "data.csv": _sha256(data_bytes)},
-        "versions": versions,
-        "platform": f"{platform.system()} {platform.machine()}",
-        "argv": sys.argv[:1],
-        "saved": datetime.now(UTC).isoformat(timespec="seconds"),
-    }
+    pp = result.passport()
+    pp.save(folder / "passport.md")
+    pp.save(folder / "passport.json")
+    run = run_record(result, text, data_bytes)
+    run["saved"] = datetime.now(UTC).isoformat(timespec="seconds")
     (folder / "run.json").write_text(json.dumps(run, indent=2, default=float) + "\n",
                                      encoding="utf-8")  # fmt: skip
     return folder

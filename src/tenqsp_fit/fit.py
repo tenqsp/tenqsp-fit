@@ -16,8 +16,15 @@ def fit(problem, *, method: str | None = None, progress: str | None = None):
     """Fit ``problem``: ``result = tf.fit(problem)``. ``method`` overrides the problem's
     (``"optimize"``, ``"laplace"``, ``"nuts"``); ``progress``
     (``"text"``, ``"plot"`` or ``"none"``) the problem's ``options progress`` (default: the
-    live plot in a notebook, the text elsewhere). Returns a ``Result``."""
-    return _fit(problem, method=method, progress=progress)
+    live plot in a notebook, the text elsewhere). Returns a ``Result``; the doctor's
+    findings (``result.doctor()``) end its printout."""
+    from .doctor import examine
+
+    result = _fit(problem, method=method, progress=progress)
+    shown = progress or problem._options.get("progress")
+    say = (lambda text: None) if shown == "none" else (lambda text: print(text, flush=True))
+    result._doctor = examine(result, say=say)
+    return result
 
 
 def _fit(problem, *, method=None, progress=None, with_se: bool = True):

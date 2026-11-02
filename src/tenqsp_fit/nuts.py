@@ -359,7 +359,7 @@ def _result(problem, post, start, arr, chains, warmup, samples, status, notes, s
         objective=post.lap if post.lap is not None else post.cond, modes=modes,
         draws=draws, stats=stats, per_chain=per_chain, chains=chains, warmup=warmup,
         samples=samples, kept=kept.shape[1], priors=post.priors, start=start, notes=notes,
-        posterior=post, inverse_mass=Minv,
+        posterior=post, inverse_mass=Minv, flat_draws=np.asarray(z[:, warm:]),
         shrinkage={},
     )  # fmt: skip
 
@@ -479,6 +479,8 @@ class PosteriorResult(Result):
             lines.append(f"{r[0]:<22}{r[1]:>11.5g}{r[3]:>10.3g}   {ci:<22}{r[6]:>7.3f}"
                          f"{ess_:>7.0f}  {r[9]}")  # fmt: skip
         lines += [f"note: {n}" for n in self.notes]
+        if getattr(self, "_doctor", None) is not None:  # the doctor reports the warnings
+            return "\n".join(lines + self._doctor_lines())
         warns = self.warnings()
         if warns:
             lines += ["", *(f"warning: {w}" for w in warns)]
