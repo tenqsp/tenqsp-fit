@@ -14,7 +14,7 @@ __all__ = ["fit"]
 
 def fit(problem, *, method: str | None = None, progress: str | None = None):
     """Fit ``problem``: ``result = tf.fit(problem)``. ``method`` overrides the problem's
-    (``"optimize"``, ``"laplace"``; ``"nuts"`` is not available yet); ``progress``
+    (``"optimize"``, ``"laplace"``, ``"nuts"``); ``progress``
     (``"text"``, ``"plot"`` or ``"none"``) the problem's ``options progress`` (default: the
     live plot in a notebook, the text elsewhere). Returns a ``Result``."""
     return _fit(problem, method=method, progress=progress)
@@ -37,6 +37,12 @@ def _fit(problem, *, method=None, progress=None, with_se: bool = True):
     if name == "laplace" and not varying:
         raise ValueError("method laplace is for parameters that vary between units, and none "
                          "does; use method optimize.")  # fmt: skip
+    if name == "nuts":
+        from .nuts import fit_nuts
+
+        if method is not None and method != problem._method.name:
+            problem = _with_method(problem, "nuts")
+        return fit_nuts(problem, progress=progress)
     if name == "laplace":
         from .laplace import Laplace, fit_laplace
 
@@ -46,3 +52,14 @@ def _fit(problem, *, method=None, progress=None, with_se: bool = True):
     from .optimize import fit_optimize
 
     return fit_optimize(problem, Objective(problem), progress=progress, with_se=with_se)
+
+
+def _with_method(problem, name):
+    """A copy of ``problem`` whose method is ``name`` (its own options dropped)."""
+    from .results import _copy
+
+    p = _copy(problem)
+    p._method = None
+    p.method(name)
+    p.check()
+    return p

@@ -337,11 +337,20 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     cores = os.cpu_count() or 1
     pool = ThreadPoolExecutor(max_workers=max(1, cores))
 
-    def value(u, Z):
-        v, Zh = obj._jit_value(to_x(jnp.asarray(u), sc), jnp.asarray(Z))
-        return float(v), np.asarray(Zh)
+    from .priors import written_penalty
 
-    gradient = jax.jit(lambda u, Z: obj._gradient(u, Z, lambda w: to_x(w, sc)))
+    penalty = written_penalty(problem, names, x0, sc)
+    pen = (lambda u: 0.0) if penalty is None else jax.jit(lambda u: penalty(to_x(u, sc)))
+    pen_grad = (lambda u: 0.0) if penalty is None else jax.jit(jax.grad(pen))
+
+    def value(u, Z):  # -2LL, plus -2 log of the written priors
+        v, Zh = obj._jit_value(to_x(jnp.asarray(u), sc), jnp.asarray(Z))
+        return float(v) + float(pen(jnp.asarray(u))), np.asarray(Zh)
+
+    grad_ll = jax.jit(lambda u, Z: obj._gradient(u, Z, lambda w: to_x(w, sc)))
+
+    def gradient(u, Z):
+        return grad_ll(u, Z) + pen_grad(u)
 
     def runs(u):
         return jnp.asarray(np.isfinite(value(np.asarray(u), Z0)[0]))
@@ -417,8 +426,9 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True, status=status)
 
     final = np.array([float(v) for v in pool.map(obj, list(X))])
+    rank = final + np.array([float(pen(jnp.asarray(to_u(x, sc)))) for x in X])
     run_ = _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status)
-    best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
+    best = int(np.argmin(np.where(np.isfinite(rank), rank, np.inf)))
     Z = obj.modes(X[best])
     pool.shutdown()
     if status == "stopped" or not with_se:
@@ -435,8 +445,10 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     shrink = {name: float(1.0 - np.std(Z[:, k], ddof=1)) if obj.n > 1 else float("nan")
               for k, (name, _) in enumerate(obj.varying)}  # fmt: skip
     return finish(problem, obj, "laplace", "BFGS, FOCE-I", names, x0, sc, U_start, run_, final,
-                  redrawn, bounds_written, t_start, modes=Z, shrinkage=shrink, objective=obj,
-                  notes=[m for m in messages if m], **cov)  # fmt: skip
+                  redrawn, bounds_written, t_start, rank=rank, modes=Z, shrinkage=shrink,
+                  objective=obj, notes=[m for m in messages if m],
+                  with_priors=None if penalty is None else float(rank[best]),
+                  **cov)  # fmt: skip
 
 
 class _Stopped(Exception):

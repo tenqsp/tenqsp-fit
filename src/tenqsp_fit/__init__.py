@@ -30,6 +30,7 @@ from .laplace import Laplace
 from .likelihood import Objective, objective
 from .optimize import Result
 from .problem import Problem
+from .results import prior_predictive
 from .text import load
 from .units import Observations, Unit
 
@@ -60,6 +61,7 @@ __all__ = [
     "normal",
     "objective",
     "power",
+    "prior_predictive",
     "proportional",
     "uniform",
     "weibull",

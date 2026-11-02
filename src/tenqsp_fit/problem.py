@@ -40,8 +40,10 @@ _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 METHODS = {
     "optimize": ("one set of parameters (least squares or maximum likelihood)", ()),
     "laplace": ("population, FOCE-I", ()),
-    "nuts": ("Bayesian, NUTS sampling", ("chains", "samples", "warmup")),
+    "nuts": ("Bayesian, NUTS sampling", ("chains", "warmup", "samples")),
 }
+# a method's options with their defaults (printed in the summary)
+METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000}}
 # options with their defaults (printed in the summary; rule: no silent defaults)
 OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None}
 
@@ -822,6 +824,18 @@ class Problem:
                     f"prior {p.name}: not an estimated quantity.{nearest(p.name, est)} "
                     f"Estimated: {', '.join(self.estimated()) or '(none)'}.",
                 )
+        # written priors suit their quantities; under NUTS every quantity has a prior
+        if est and all(p.name in est for p in self._priors):
+            from .optimize import scales
+            from .priors import priors
+
+            names, x0, bounds = self._starts()
+            sc = scales(names, x0, bounds, self._kinds(names))
+            nuts = self._method is not None and self._method.name == "nuts"
+            origin = {p.name: p for p in self._priors}
+            for text in priors(self, names, x0, sc, defaults=nuts)[1]:
+                name = text.split(":")[0].removeprefix("prior ")
+                add(origin.get(name), text)
 
         # the method suits the problem
         if self._method is None:
@@ -1354,10 +1368,26 @@ class Problem:
         links = [f"{n} = {e} (model)" for n, e in m.definitions.items() if m.param_names(e) & taken]
         links += [f"{d.name} = {d.formula} (this fit)" for d in self._defines]
         row("formulas", "; ".join(links) or "none")
-        for p in self._priors:
-            row("prior" if p is self._priors[0] else "", f"{p.name} ~ {p.dist}")
         meth = self._method
-        mo = " ".join(f"{k}={v}" for k, v in meth.options.items())
+        if meth.name == "nuts":  # every quantity has a prior, the defaults marked
+            from .optimize import scales
+            from .priors import priors
+
+            names, x0, bounds = self._starts()
+            sc = scales(names, x0, bounds, self._kinds(names))
+            shown = [f"{p.name} ~ {p}" for p in priors(self, names, x0, sc, defaults=True)[0]]
+            shown += [f"corr({', '.join(c.names)}) ~ LKJ(2) (default)" for c in self._correlations]
+        else:
+            shown = [f"{p.name} ~ {p.dist}" for p in self._priors]
+            if shown:
+                shown[-1] += "  (used: the estimates are the posterior mode)"
+        for i, text in enumerate(shown):
+            row("prior" if i == 0 else "", text)
+        meth = self._method
+        mo = " ".join(
+            f"{k}={meth.options[k]}" if k in meth.options else f"{k}={v} (default)"
+            for k, v in {**METHOD_DEFAULTS.get(meth.name, {}), **meth.options}.items()
+        )
         row("method", f"{meth.name} ({METHODS[meth.name][0]})" + (f", {mo}" if mo else ""))
         opts = []
         for k, default in OPTIONS.items():

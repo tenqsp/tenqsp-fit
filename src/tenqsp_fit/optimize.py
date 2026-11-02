@@ -444,6 +444,9 @@ class Result:
             rse = f"{row[3]:.3g}" if np.isfinite(row[3]) else ""
             se = f"{row[2]:.4g}" if np.isfinite(row[2]) else ""
             lines.append(f"{row[0]:<22}{row[1]:>12.5g}{se:>11}{rse:>7}   {ci:<22}  {row[6]}")
+        if getattr(self, "with_priors", None) is not None:
+            lines += ["", f"with the written priors: the estimates are the posterior mode; "
+                      f"-2LL plus the priors' terms {self.with_priors:.4f}"]  # fmt: skip
         status = getattr(self, "covariance_status", "ok")
         if status != "ok":
             lines += ["", f"standard errors {status}."]
@@ -466,7 +469,14 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
     progress = progress or opts.get("progress") or default_progress()
     t_start = time.perf_counter()
 
-    least_squares = not obj.error_estimated
+    from .priors import written_penalty
+
+    penalty = written_penalty(problem, names, x0, sc)
+    least_squares = not obj.error_estimated and penalty is None
+
+    def total(x):  # what is minimized: -2LL, plus -2 log of the written priors
+        v = obj._minus2ll(x)
+        return v if penalty is None else v + penalty(x)
 
     def residuals(u, args=None):
         r = obj._residuals(to_x(u, sc))
@@ -474,7 +484,7 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
         return jnp.where(ok, r, BAD), ok
 
     def value(u, args=None):
-        v = obj._minus2ll(to_x(u, sc))
+        v = total(to_x(u, sc))
         ok = jnp.isfinite(v)
         return jnp.where(ok, v, BAD_VALUE), ok
 
@@ -522,19 +532,23 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
             jnp.sum(fn(jnp.asarray(U_start[0]))[0] ** 2)
         )
 
+    total_jit = jax.jit(total)
     run = run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
-                     "optimize", const, problem.name, obj)  # fmt: skip
+                     "optimize", const, problem.name, total_jit)  # fmt: skip
     final = np.array([float(v) for v in ThreadPoolExecutor(len(U_start)).map(obj, list(run.X))])
-    best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
+    rank = final if penalty is None else np.array([float(total_jit(jnp.asarray(x)))
+                                                   for x in run.X])  # fmt: skip
+    best = int(np.argmin(np.where(np.isfinite(rank), rank, np.inf)))
     if run.status == "stopped" or not with_se:
         cov = no_covariance(len(names), None if with_se else NOT_ASKED)
     else:
-        gradient = jax.jit(jax.grad(lambda u: obj._minus2ll(to_x(u, sc))))
+        gradient = jax.jit(jax.grad(lambda u: total(to_x(u, sc))))
         cov = covariance(None, to_u(run.X[best], sc), sc,
                          gradient=lambda u: gradient(jnp.asarray(u)))  # fmt: skip
     return finish(problem, obj, "optimize", "Levenberg-Marquardt" if least_squares else "BFGS",
                   names, x0, sc, U_start, run, final, redrawn, user_bounds(problem, names),
-                  t_start, objective=obj,
+                  t_start, objective=obj, rank=rank,
+                  with_priors=None if penalty is None else float(rank[best]),
                   **cov)  # fmt: skip
 
 
@@ -625,8 +639,10 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
 
 
 def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, redrawn,
-           bounds_written, t_start, **extra) -> Result:  # fmt: skip
-    """The result from the runs: the best start, the table of starts, the trace."""
+           bounds_written, t_start, rank=None, **extra) -> Result:  # fmt: skip
+    """The result from the runs: the best start (lowest ``rank``, by default -2LL ``final``;
+    with written priors, -2LL plus their terms), the table of starts, the trace."""
+    rank = final if rank is None else rank
     X, steps, done, status, n = run.X, run.steps, run.done, run.status, len(U_start)
     start_status = []
     for j in range(n):
@@ -634,7 +650,7 @@ def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, 
             start_status.append("converged" if np.isfinite(final[j]) else "failed")
         else:
             start_status.append("stopped" if status == "stopped" else "max iterations")
-    best = int(np.argmin(np.where(np.isfinite(final), final, np.inf)))
+    best = int(np.argmin(np.where(np.isfinite(rank), rank, np.inf)))
     if status is None:
         status = start_status[best]
     starts_table = pd.DataFrame(

@@ -223,12 +223,10 @@ def test_waterfall(tmp_path):
     assert "3 of 3 starts at the best fit" in ax.get_title()
 
 
-def test_methods_not_yet_and_unknown(tmp_path):
+def test_methods_unsuited_and_unknown(tmp_path):
     p = problem(tmp_path)
     with pytest.raises(ValueError, match="method laplace is for parameters that vary"):
         tf.fit(p, method="laplace")
-    with pytest.raises(NotImplementedError, match="method nuts is not available yet"):
-        tf.fit(p, method="nuts")
     with pytest.raises(ValueError, match="unknown method 'optimise'. Did you mean 'optimize'"):
         tf.fit(p, method="optimise")
 

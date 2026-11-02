@@ -231,10 +231,16 @@ class VPC:
     figure: object
     n: int
     percentiles: tuple
+    draws: pd.DataFrame | None = None  # the prior predictive check: the quantities drawn
+    failed: int = 0  # simulated studies whose model did not run, left out
+    ran: np.ndarray | None = None
 
     def __repr__(self) -> str:
-        return (f"<VPC: {self.n} simulations, percentiles {list(self.percentiles)}, "
-                f"{len(self.table)} bins; .table, .figure>")  # fmt: skip
+        what = "prior predictive check" if self.draws is not None else "VPC"
+        more = ", .draws" if self.draws is not None else ""
+        left = f" ({self.failed} did not run, left out)" if self.failed else ""
+        return (f"<{what}: {self.n} simulations{left}, percentiles {list(self.percentiles)}, "
+                f"{len(self.table)} bins; .table, .figure{more}>")  # fmt: skip
 
 
 def _bins(t: np.ndarray, n_bins: int | None):
@@ -253,29 +259,55 @@ def vpc(result, *, n: int = 200, seed: int = 0, bins: int | None = None,
         percentiles=(5, 50, 95), interval: float = 0.95, log: bool = False) -> VPC:  # fmt: skip
     """Simulate the data ``n`` times from the fit (new units each time: scores drawn from
     their distribution and correlation; residual errors from the error model; the same
-    doses, times and censoring limits), and compare the percentiles over time."""
-    cond, x = _cond(result), _xs(result)
+    doses, times and censoring limits), and compare the percentiles over time. After NUTS,
+    each simulated study takes the quantities of a different posterior draw."""
+    rng = np.random.default_rng(seed)
+    draws = getattr(result, "draws", None)
+    if draws is not None and len(draws):
+        k = draws[list(result.names)].to_numpy()
+        xs = k[rng.integers(0, len(k), n)]
+    else:
+        xs = np.tile(np.asarray(result.x, float), (n, 1))
+    return simulate_vpc(result.problem.name, result.objective, xs, rng, bins=bins,
+                        percentiles=percentiles, interval=interval, log=log,
+                        title="visual predictive check")  # fmt: skip
+
+
+def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95),
+                 interval=0.95, log=False, title="visual predictive check") -> VPC:  # fmt: skip
+    """The VPC's simulations and plot, one study per row of ``xs`` (the quantities)."""
+    cond = getattr(objective, "_cond", objective)
     if any(lk["error"] is None for lk in cond._links):
         raise NotImplementedError("vpc: a link with a written likelihood cannot be simulated.")
-    rng = np.random.default_rng(seed)
+    n = len(xs)
     n_units = len(cond.units)
-    q = getattr(result.objective, "q", 0)
-    if q:
-        R = np.asarray(result.objective._R(x))
-        L = np.linalg.cholesky(R)
-        Zs = rng.standard_normal((n, n_units, q)) @ L.T
-    else:
-        Zs = np.zeros((n, n_units, 0))
+    q = getattr(objective, "q", 0)
+    E = rng.standard_normal((n, n_units, q))
+    X = jnp.asarray(xs, dtype=jnp.float64)
 
-    def one(Z):
-        P = cond._model_params(x, Z if q else None)
-        return cond._predictions(x, cond._fs(P))
+    def one(x, e):
+        Z = e @ jnp.linalg.cholesky(objective._R(x)).T if q else None
+        return cond._predictions(x, cond._fs(cond._model_params(x, Z)))
 
     batched = jax.jit(jax.vmap(one))
     preds = []
     for k in range(0, n, 50):  # in chunks: memory
-        preds.append(jax.tree.map(np.asarray, batched(jnp.asarray(Zs[k : k + 50]))))
+        preds.append(jax.tree.map(np.asarray, batched(X[k : k + 50], jnp.asarray(E[k : k + 50]))))
     sims = {lhs: np.concatenate([p[lhs] for p in preds]) for lhs in preds[0]}
+    # a study whose model did not run (values out of the model's range: wide priors, a
+    # unit far in a distribution's tail) is left out, and counted
+    ran = np.ones(n, bool)
+    for lk in cond._links:
+        at = np.asarray(lk["obs"]) | np.asarray(lk["cens"])
+        ran &= np.all(np.isfinite(sims[lk["lhs"]][:, at]), axis=1)
+    failed = int((~ran).sum())
+    if failed == n:
+        raise RuntimeError(f"{name}: none of the {n} simulated studies ran (the model fails at "
+                           "every set of values drawn).")  # fmt: skip
+    if failed:
+        sims = {k: v[ran] for k, v in sims.items()}
+        X = X[jnp.asarray(ran)]
+        title = f"{title} ({failed} of {n} studies did not run, left out)"
 
     rows = []
     ptiles = tuple(float(p) for p in percentiles)
@@ -283,7 +315,7 @@ def vpc(result, *, n: int = 200, seed: int = 0, bins: int | None = None,
     for lk in cond._links:
         lhs = lk["lhs"]
         f = sims[lhs]  # (n, units, measurements)
-        sd = np.asarray(jax.vmap(lambda g, lk=lk: cond._sd(lk, x, g))(jnp.asarray(f)))
+        sd = np.asarray(jax.vmap(lambda x, g, lk=lk: cond._sd(lk, x, g))(X, jnp.asarray(f)))
         y = f + sd * rng.standard_normal(f.shape)
         valid = np.asarray(lk["obs"]) | np.asarray(lk["cens"])
         limit = np.asarray(lk["limit"])
@@ -315,11 +347,53 @@ def vpc(result, *, n: int = 200, seed: int = 0, bins: int | None = None,
                 row[f"sim {tag} hi"] = float(np.quantile(sim_p[j], 1 - a))
             rows.append(row)
     table = pd.DataFrame(rows)
-    fig = _plot_vpc(result, table, cond, ptiles, interval, log)
-    return VPC(table=table, figure=fig, n=n, percentiles=ptiles)
+    fig = _plot_vpc(name, table, cond, ptiles, interval, log, title)
+    return VPC(table=table, figure=fig, n=n, percentiles=ptiles, failed=failed, ran=ran)
 
 
-def _plot_vpc(result, table, cond, ptiles, interval, log):
+def prior_predictive(problem, *, n: int = 200, seed: int = 0, bins: int | None = None,
+                     percentiles=(5, 50, 95), interval: float = 0.95,
+                     log: bool = False) -> VPC:  # fmt: skip
+    """The prior predictive check (before fitting: what data do the priors expect?):
+    ``n`` studies simulated with the data's doses, times and limits, each with its
+    quantities drawn from the priors (written, or by default as under ``method nuts``), new
+    units from their distributions, and residual errors. The data's percentiles over the
+    simulated ones' bands, as a VPC. Returns a ``VPC`` with ``.draws``, the quantities
+    drawn (and whether the model ran with them; a study that did not run is left out of the
+    bands and counted in ``.failed``)."""
+    from .errors import ProblemError
+    from .laplace import Laplace
+    from .likelihood import Objective
+    from .optimize import scales
+    from .priors import lkj_draw, priors
+
+    problem.check()
+    objective = Laplace(problem) if problem._varying() else Objective(problem)
+    names = list(objective.names)
+    x0 = np.asarray(objective.x0, float)
+    sc = scales(names, x0, objective.bounds, objective.kinds)
+    found, problems = priors(problem, names, x0, sc, defaults=True)
+    if problems:
+        raise ProblemError(problems)
+    rng = np.random.default_rng(seed)
+    xs = np.tile(x0, (n, 1))
+    index = {k: i for i, k in enumerate(names)}
+    for p in found:
+        xs[:, index[p.name]] = p.draw(rng, n)
+    for c in problem._correlations:
+        R = lkj_draw(rng, len(c.names), n)
+        for i, a in enumerate(c.names):
+            for j in range(i + 1, len(c.names)):
+                xs[:, index[f"corr({a},{c.names[j]})"]] = R[:, i, j]
+    vp = simulate_vpc(problem.name, objective, xs, rng, bins=bins, percentiles=percentiles,
+                      interval=interval, log=log,
+                      title=f"prior predictive check, {n} studies from the priors")  # fmt: skip
+    vp.draws = pd.DataFrame(xs, columns=names)
+    vp.draws["ran"] = vp.ran  # False: the model did not run with these values
+    return vp
+
+
+def _plot_vpc(name, table, cond, ptiles, interval, log, title):
     plt = _pyplot()
     links = list(dict.fromkeys(table.link))
     fig, axes = plt.subplots(1, len(links), figsize=(5.2 * len(links), 3.8), squeeze=False)
@@ -344,7 +418,7 @@ def _plot_vpc(result, table, cond, ptiles, interval, log):
         ax.set_ylabel(lhs)
         ax.set_title(f"{lhs}: data percentiles {', '.join(f'{p:g}' for p in ptiles)} (lines), "
                      f"simulated {interval:.0%} intervals (bands)", fontsize=8)  # fmt: skip
-    fig.suptitle(f"{result.problem.name}: visual predictive check", fontsize=11)
+    fig.suptitle(f"{name}: {title}", fontsize=11)
     fig.tight_layout()
     return fig
 
@@ -556,6 +630,9 @@ def save(result, folder) -> Path:
     result.table().to_csv(folder / "estimates.csv", index=False)
     result.starts.to_csv(folder / "starts.csv", index=False)
     result.trace.to_csv(folder / "trace.csv", index=False)
+    if getattr(result, "draws", None) is not None:  # NUTS: every draw, and each chain's checks
+        result.draws.to_csv(folder / "draws.csv", index=False)
+        result.convergence().to_csv(folder / "convergence.csv", index=False)
     write_tables(result, folder)
     (folder / "result.txt").write_text(repr(result) + "\n", encoding="utf-8")
     plt = _pyplot()

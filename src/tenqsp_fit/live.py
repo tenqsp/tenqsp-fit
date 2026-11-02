@@ -58,9 +58,12 @@ def _figsize(names) -> tuple[float, float]:
     return 3.1 * ncols, 2.3 * math.ceil(n_panels / ncols) + 0.4
 
 
-def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None):
-    """The figure: -2LL against the step (top left), then one panel per quantity. One line
-    per start, the best start (lowest -2LL so far) dark and thick, the others light."""
+def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None, value: str = "-2LL",
+               line: str = "start", xlabel: str = "step", warmup: int | None = None):  # fmt: skip
+    """The figure: -2LL (the column ``value``) against the step (top left), then one panel per
+    quantity. One line per start (``line``: per chain for NUTS), the best (lowest value so
+    far) dark and thick, the others light; ``warmup``: a dotted line where NUTS's draws
+    begin."""
     _matplotlib()
     n_panels = 1 + len(names)
     ncols = min(NCOLS, n_panels)
@@ -74,23 +77,28 @@ def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None):
     for ax in axes[n_panels:]:
         ax.set_visible(False)
     if len(trace):
-        last = trace.groupby("start")["-2LL"].min()
+        last = trace.groupby(line)[value].min()
         best = int(last.idxmin())
         order = [s for s in last.index if s != best] + [best]
         for s in order:
-            d = trace[trace.start == s]
+            d = trace[trace[line] == s]
             style = (dict(color="#1f3b73", lw=1.8, zorder=3) if s == best
                      else dict(color="#9bb3d6", lw=0.9, zorder=2))  # fmt: skip
-            axes[0].plot(d.iteration, d["-2LL"], **style)
+            axes[0].plot(d.iteration, d[value], **style)
             for ax, name in zip(axes[1:], names, strict=False):
                 ax.plot(d.iteration, d[name], **style)
-        v = trace["-2LL"].to_numpy()
-        lo, hi = float(np.nanmin(v)), float(np.nanmax(v))
-        pad = max(hi - lo, 1e-3) * 0.05
-        axes[0].set_ylim(lo - pad, hi + pad)
-        axes[0].set_title(f"-2LL (best {lo:.4f})", fontsize=9)
+        v = trace[value].to_numpy()
+        v = v[np.isfinite(v)]
+        if len(v):
+            lo, hi = float(np.min(v)), float(np.max(v))
+            pad = max(hi - lo, 1e-3) * 0.05
+            axes[0].set_ylim(lo - pad, hi + pad)
+            axes[0].set_title(f"{value} (lowest {lo:.4f})", fontsize=9)
+        if warmup is not None and trace.iteration.max() >= warmup:
+            for ax in axes[:n_panels]:
+                ax.axvline(warmup, ls=":", color="0.5", lw=1)
     else:
-        axes[0].set_title("-2LL", fontsize=9)
+        axes[0].set_title(value, fontsize=9)
     for ax, name in zip(axes[1:], names, strict=False):
         ax.set_title(name, fontsize=9)
     from matplotlib.ticker import MaxNLocator
@@ -100,7 +108,7 @@ def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None):
         ax.tick_params(labelsize=7)
         ax.ticklabel_format(axis="y", useOffset=False, style="plain")
     for ax in axes[max(0, n_panels - ncols) : n_panels]:
-        ax.set_xlabel("step", fontsize=8)
+        ax.set_xlabel(xlabel, fontsize=8)
     if title:
         fig.suptitle(title, fontsize=10)
     fig.tight_layout()
@@ -111,8 +119,10 @@ class LivePlot:
     """Redraws the trace every ``REFRESH`` seconds: in a notebook in place, elsewhere as a
     page in the browser (``path``)."""
 
-    def __init__(self, names, label: str, problem_name: str, *, open_browser: bool = True):
+    def __init__(self, names, label: str, problem_name: str, *, open_browser: bool = True,
+                 **trace_options):  # fmt: skip
         self.names, self.label, self.problem_name = list(names), label, problem_name
+        self.trace_options = trace_options  # draw_trace's value, line, xlabel, warmup
         self.notebook = in_notebook()
         self.drawn = -1e9
         self.handle = None
@@ -144,7 +154,7 @@ class LivePlot:
 
             self.fig = Figure(figsize=_figsize(self.names))
             FigureCanvasAgg(self.fig)
-        draw_trace(trace, self.names, title=title, fig=self.fig)
+        draw_trace(trace, self.names, title=title, fig=self.fig, **self.trace_options)
         buf = io.BytesIO()
         self.fig.savefig(buf, format="png", dpi=90)
         png = buf.getvalue()
