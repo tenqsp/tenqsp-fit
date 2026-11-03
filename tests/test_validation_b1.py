@@ -64,6 +64,7 @@ def compare(result, ref, names):
     return pd.DataFrame(rows)
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)
 def test_b1_population_against_nlme():
     file = B1 / "theoph.csv"
@@ -89,6 +90,7 @@ def test_b1_population_against_nlme():
     assert r.m2ll <= at_nlme + 1e-6, (r.m2ll, at_nlme)
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)
 def test_b1_each_subject_against_nls(tmp_path):
     data = pd.read_csv(B1 / "theoph.csv")

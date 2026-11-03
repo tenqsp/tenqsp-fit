@@ -244,6 +244,7 @@ def _reference():
     return {k: np.asarray(v) for k, v in mcmc.get_samples().items()}
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)
 def test_nuts_draws_the_posterior(sampled, reference):
     t = sampled.table().set_index("quantity")
@@ -260,6 +261,7 @@ def test_nuts_draws_the_posterior(sampled, reference):
     assert int(sampled.convergence().divergences.sum()) == 0
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)
 def test_the_nuts_result(sampled, tmp_path):
     r = sampled
@@ -331,6 +333,7 @@ def test_a_study_that_does_not_run_is_left_out(tmp_path):
     assert "1 of 20 studies did not run" in v.figure._suptitle.get_text()
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)
 def test_the_doctor_and_passport_after_nuts(sampled):
     d = sampled.doctor()
@@ -350,6 +353,7 @@ def test_the_doctor_and_passport_after_nuts(sampled):
     assert "doctor:" in repr(sampled)
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)  # the first to ask for the samples runs them
 def test_to_arviz(sampled):
     """The draws, the sampler's statistics and the data, by chain and draw."""
@@ -365,6 +369,7 @@ def test_to_arviz(sampled):
     np.testing.assert_allclose(dt["observed_data"]["conc"].values, table().DV.to_numpy())
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)  # the first to ask for the samples runs them
 def test_a_prediction_after_nuts_is_a_posterior_interval(sampled):
     import tenqsp as tq
@@ -383,6 +388,7 @@ def test_a_prediction_after_nuts_is_a_posterior_interval(sampled):
     assert "nuts" in fig.subfigs[2]._suptitle.get_text()
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(900)
 def test_to_arviz_with_units(tmp_path):
     """Each unit's normal score per draw; their medians are the result's modes."""

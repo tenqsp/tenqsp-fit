@@ -58,6 +58,7 @@ def ragged():
 CASES = [("laplace", POP, X_POP), ("optimize", POOLED, X_POOLED)]
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(("method", "estimates", "x"), CASES)
 def test_padding_does_not_change_the_likelihood(tmp_path, method, estimates, x):

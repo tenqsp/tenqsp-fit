@@ -46,6 +46,9 @@ packages = ["src/tenqsp_fit"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 120
+markers = [
+    "slow: minutes each (NUTS runs, validation against references); CI runs them weekly and on demand",
+]
 
 [tool.ruff]
 line-length = 100
