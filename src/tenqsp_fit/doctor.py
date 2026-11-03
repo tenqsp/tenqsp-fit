@@ -440,47 +440,37 @@ def _jumps(result) -> list[Finding]:
 
 
 # ----------------------------------------------------------------------------- tolerance
-def _tighter(problem):
-    from .results import _copy
-
-    p = _copy(problem)
-    opts = dict(p._options)
-    opts["rtol"] = float(opts.get("rtol") or 1e-6) / TIGHTEN
-    if opts.get("atol") is not None:
-        opts["atol"] = float(opts["atol"]) / TIGHTEN
-    p._options = opts
-    return p, opts["rtol"]
+def _tighter(cond, problem):
+    """The tolerances of the checks (the problem's / ``TIGHTEN``; atol only when set) and
+    that rtol. The compiled functions take the tolerances as an input
+    (``Objective._tolerant``), so the checks rerun them without a new compile."""
+    return cond.tighter(TIGHTEN), float(problem._options.get("rtol") or 1e-6) / TIGHTEN
 
 
 def _tolerance(result) -> list[Finding]:
     from .laplace import Laplace
-    from .likelihood import Objective
     from .optimize import to_u, to_x
 
-    p2, rtol2 = _tighter(result.problem)
-    rtol = float(result.problem._options.get("rtol") or 1e-6)
     obj = result.objective
+    cond = getattr(obj, "_cond", obj)
+    tight, rtol2 = _tighter(cond, result.problem)
+    rtol = float(result.problem._options.get("rtol") or 1e-6)
     sc = result.scales
     x = jnp.asarray(result.x)
     u = jnp.asarray(to_u(np.asarray(result.x), sc))
     if isinstance(obj, Laplace):
-        obj2 = Laplace(p2)
-        Z = jnp.asarray(result.modes)
-        Z2 = jnp.asarray(obj2.modes(x, Z))
-
-        def grad(o, Zk):
-            return np.asarray(jax.jit(lambda w: o._gradient(w, Zk, lambda v: to_x(v, sc)))(u))
-
-        v1, v2 = float(obj(x)), float(obj2(x))
-        dg = grad(obj2, Z2) - grad(obj, Z)
+        zeros = jnp.zeros((obj.n, obj.q))
+        v1 = float(obj._jit_value(x, zeros)[0])
+        v2, Z2 = obj._jit_value(x, zeros, tight)
+        v2 = float(v2)
+        grad = jax.jit(cond._tolerant(lambda w, Zk: obj._gradient(w, Zk, lambda v: to_x(v, sc))))
+        dg = np.asarray(grad(u, Z2, tol=tight)) - np.asarray(
+            grad(u, jnp.asarray(result.modes), tol=cond._tol0)
+        )
     else:
-        obj2 = Objective(p2)
-        v1, v2 = float(obj(x)), float(obj2(x))
-
-        def grad(o):
-            return np.asarray(jax.grad(lambda w: o._minus2ll(to_x(w, sc)))(u))
-
-        dg = grad(obj2) - grad(obj)
+        v1, v2 = float(obj._jit(x)), float(obj._jit(x, tight))
+        grad = jax.jit(cond._tolerant(jax.grad(lambda w: obj._minus2ll(to_x(w, sc)))))
+        dg = np.asarray(grad(u, tol=tight)) - np.asarray(grad(u, tol=cond._tol0))
     d = abs(v2 - v1)
     H = np.asarray(getattr(result, "hessian_u", np.nan), float)
     C = np.asarray(getattr(result, "cov_u", np.nan), float)
@@ -514,11 +504,10 @@ def _se(shift: float) -> str:
 
 
 def _gradients(result) -> list[Finding]:
-    from .likelihood import Objective
     from .optimize import to_u, to_x
 
-    p2, rtol2 = _tighter(result.problem)
-    obj, obj2, sc = result.objective, Objective(p2), result.scales
+    obj, sc = result.objective, result.scales
+    tight, rtol2 = _tighter(obj, result.problem)
     u0 = np.asarray(to_u(np.asarray(result.x), sc))
     C = np.asarray(getattr(result, "cov_u", np.nan), float)
     try:
@@ -527,12 +516,10 @@ def _gradients(result) -> list[Finding]:
         L = 0.1 * np.eye(len(u0))
     rng = np.random.default_rng(int(result.problem._options.get("seed", 0)))
 
-    def f(o):
-        return lambda w: o._minus2ll(to_x(w, sc))
-
-    f1 = f(obj)
-    f1_jit = jax.jit(f1)
-    f2 = jax.jit(f(obj2))
+    f1 = lambda w: obj._minus2ll(to_x(w, sc))  # noqa: E731
+    # the fit's own compiled -2LL, at either tolerance: no new compile
+    f1_jit = lambda w: obj._jit(to_x(w, sc))  # noqa: E731
+    f2 = lambda w: obj._jit(to_x(w, sc), tight)  # noqa: E731
     rel = []
     for u in _plausible(f1_jit, u0, L, float(f1_jit(jnp.asarray(u0))), rng):
         d = rng.normal(size=len(u0))
@@ -581,17 +568,6 @@ def _gradient_finding(rel, rtol2, problem) -> Finding:
 
 
 # ----------------------------------------------------------------------------- NUTS
-def _posterior_at(problem):
-    from .laplace import Laplace
-    from .likelihood import Objective
-    from .nuts import Posterior
-
-    if problem._varying():
-        lap = Laplace(problem)
-        return Posterior(problem, lap, lap._cond)
-    return Posterior(problem, None, Objective(problem))
-
-
 def _some_draws(result, n):
     flat = result.flat_draws.reshape(-1, result.flat_draws.shape[-1])
     if not len(flat):
@@ -600,14 +576,16 @@ def _some_draws(result, n):
 
 
 def _tolerance_nuts(result) -> list[Finding]:
-    p2, rtol2 = _tighter(result.problem)
+    post = result.posterior
+    tight, rtol2 = _tighter(post.cond, result.problem)
     rtol = float(result.problem._options.get("rtol") or 1e-6)
     pts = _some_draws(result, NUTS_POINTS)
     if not len(pts):
         return []
-    post2 = _posterior_at(p2)
-    U1 = np.asarray(jax.vmap(result.posterior.potential)(jnp.asarray(pts)))
-    U2 = np.asarray(jax.vmap(post2.potential)(jnp.asarray(pts)))
+    at = post.cond._tolerant(post.potential)
+    U = jax.jit(jax.vmap(lambda f, tol: at(f, tol=tol), in_axes=(0, None)))
+    U1 = np.asarray(U(jnp.asarray(pts), post.cond._tol0))
+    U2 = np.asarray(U(jnp.asarray(pts), tight))
     d = float(np.max(np.abs(2.0 * (U2 - U1))))  # as -2 log posterior
     ev = {"rtol": rtol, "tighter rtol": rtol2, "largest change of -2 log posterior": d}
     text = f"at rtol {rtol2:g}, -2 log posterior changes by at most {d:.2g} over {len(pts)} draws"
@@ -620,12 +598,14 @@ def _tolerance_nuts(result) -> list[Finding]:
 
 
 def _gradients_nuts(result) -> list[Finding]:
-    p2, rtol2 = _tighter(result.problem)
+    post = result.posterior
+    tight, rtol2 = _tighter(post.cond, result.problem)
     pts = _some_draws(result, GRAD_DIRECTIONS)
     if not len(pts):
         return []
-    U1 = result.posterior.potential
-    U2 = jax.jit(_posterior_at(p2).potential)
+    U1 = post.potential
+    at = jax.jit(post.cond._tolerant(post.potential))
+    U2 = lambda f: at(f, tol=tight)  # noqa: E731
     rng = np.random.default_rng(int(result.problem._options.get("seed", 0)))
     rel = []
     for f in pts:

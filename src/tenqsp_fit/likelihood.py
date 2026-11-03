@@ -171,6 +171,11 @@ class Objective:
             sim_opts["atol"] = float(opts["atol"])
         sim = problem.model.simulator(outputs=list(outputs), **sim_opts)
         self._sim, self._scenarios, self._units = sim, scenarios, units
+        # the tolerances of every compiled call, as an input (so the doctor reruns a compiled
+        # function at tighter ones without a new compile): the problem's, and ``_tol`` those
+        # of the call being traced (``_tolerant``)
+        self._tol0 = {k: jnp.asarray(v, dtype=jnp.float64) for k, v in sim_opts.items()}
+        self._tol = None
         self._wrt_arg = list(wrt) or [next(iter(m.params))]
         self._fs = sim.function(scenarios, wrt=self._wrt_arg)
         if not wrt:  # nothing reaches the model: still one function, at its own values
@@ -247,13 +252,38 @@ class Objective:
         self._links = links
         self.n_observations = sum(lk["n"] for lk in links)
         self.n_censored = sum(lk["n_censored"] for lk in links)
-        self._jit = jax.jit(self._minus2ll)
+        jitted = jax.jit(self._tolerant(self._minus2ll))
+        self._jit = lambda x, tol=None: jitted(x, tol=self._tol0 if tol is None else tol)
 
     # ------------------------------------------------------------------ the function
+    def _run(self, P):
+        """The batched simulation at the units' model parameters ``P``, at the tolerances of
+        the call being traced (the problem's outside ``_tolerant``)."""
+        return self._fs(P, **(self._tol or {}))
+
+    def _tolerant(self, fn):
+        """``fn`` with one more keyword input, ``tol`` ({"rtol": ..., "atol": ...} as
+        arrays): every simulation inside runs at those tolerances. For ``jax.jit``: a call
+        at other tolerances reuses the compiled function."""
+
+        def at(*args, tol):
+            before, self._tol = self._tol, tol
+            try:
+                return fn(*args)
+            finally:
+                self._tol = before
+
+        return at
+
+    def tighter(self, factor: float) -> dict:
+        """The problem's tolerances divided by ``factor`` (atol only when the problem sets
+        it), in the form ``tol`` takes."""
+        return {k: v / factor for k, v in self._tol0.items()}
+
     def predictions(self, x) -> dict:
         """Each link's prediction at its measurements: ``{lhs: (units, measurements)}``, on
         the link's scale (0 where a unit has fewer measurements)."""
-        return self._predictions(x, self._fs(self._model_params(x)))
+        return self._predictions(x, self._run(self._model_params(x)))
 
     def _predictions(self, x, out) -> dict:
         result = {}
@@ -305,7 +335,7 @@ class Objective:
         """Each measurement's contribution to -2 log-likelihood: ``{lhs: (units,
         measurements)}`` (0 for padding)."""
         x = jnp.asarray(x, dtype=jnp.float64)
-        return self._terms(x, self._fs(self._model_params(x)))
+        return self._terms(x, self._run(self._model_params(x)))
 
     def _link_terms(self, lk, x, f):
         """-2 log-density of each measurement of a link given its prediction ``f`` (an error

@@ -124,8 +124,12 @@ class Laplace:
             for i, a in enumerate(c.names)
             for b in c.names[i + 1 :]
         ]
-        self._jit_value = jax.jit(self._value)
-        self._jit_modes = jax.jit(self._modes)
+        value = jax.jit(cond._tolerant(self._value))
+        modes = jax.jit(cond._tolerant(self._modes))
+        # the tolerances are an input (None: the problem's): see Objective._tolerant
+        at = lambda tol: cond._tol0 if tol is None else tol  # noqa: E731
+        self._jit_value = lambda x, Z0, tol=None: value(x, Z0, tol=at(tol))
+        self._jit_modes = lambda x, Z0, tol=None: modes(x, Z0, tol=at(tol))
 
     # ------------------------------------------------------------------ pieces
     def _R(self, x):
@@ -136,7 +140,7 @@ class Laplace:
 
     def _preds(self, P):
         cond = self._cond
-        out = cond._predictions(None, cond._fs(P))
+        out = cond._predictions(None, cond._run(P))
         return tuple(out[lk["lhs"]] for lk in cond._links)
 
     def _local(self, x, preds):

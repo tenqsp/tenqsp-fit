@@ -103,7 +103,7 @@ class Posterior:
 
     def m2ll(self, x, Z):
         c = self.cond
-        return sum(jnp.sum(t) for t in c._terms(x, c._fs(c._model_params(x, Z))).values())
+        return sum(jnp.sum(t) for t in c._terms(x, c._run(c._model_params(x, Z))).values())
 
     def potential(self, flat):
         u, E = self.split(flat)
