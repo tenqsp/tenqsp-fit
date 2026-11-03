@@ -47,7 +47,7 @@ packages = ["src/tenqsp_fit"]
 testpaths = ["tests"]
 timeout = 120
 markers = [
-    "slow: minutes each (NUTS runs, validation against references); CI runs them weekly and on demand",
+    "slow: minutes each (NUTS runs, validation against references); CI runs them after the others",
 ]
 
 [tool.ruff]

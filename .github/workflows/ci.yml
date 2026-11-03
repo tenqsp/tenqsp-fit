@@ -1,36 +1,29 @@
 name: CI
 
 # The repository is private until its first release, so every run spends the account's
-# Actions minutes; the runs are kept small:
-# - each push to main and each pull request: lint + the tests not marked slow, Linux, Python
-#   3.12; an older run is cancelled when a newer push arrives;
-# - Mondays and on demand: also the slow tests (NUTS runs, validation against the stored
-#   reference fits), and Python 3.13.
-# TenQSP is installed from its main branch: tenqsp-fit 0.1 needs TenQSP 0.7.0, not yet released.
+# Actions minutes: CI runs on demand (Actions tab, or gh workflow run ci.yml) and on Mondays,
+# not on each push (owner, 2026-11-03). Each run: lint, the tests not marked slow, then the
+# slow ones (NUTS runs, validation against the stored reference fits); Linux, Python 3.12.
+# TenQSP is installed from its main branch: tenqsp-fit 0.1 needs TenQSP 0.7.0, not
+# yet released.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ["**.md"]
-  pull_request:
-    paths-ignore: ["**.md"]
   schedule:
     - cron: "0 4 * * 1"
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: false
 
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["3.12", "3.13"]' || '["3.12"]') }}
+        python-version: ["3.12"]  # 3.13 at the release check
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
-      FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
       JAX_PLATFORMS: cpu
     steps:
       - uses: actions/checkout@v5
@@ -49,6 +42,5 @@ jobs:
       # (120 s, there to catch a hang) is raised
       - name: Tests (not slow)
         run: pytest -q -p no:cacheprovider -m "not slow" -o timeout=600
-      - name: Slow tests (Mondays, on demand)
-        if: env.FULL == 'true'
+      - name: Slow tests
         run: pytest -q -p no:cacheprovider -m slow -o timeout=3600
