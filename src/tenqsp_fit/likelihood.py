@@ -131,15 +131,15 @@ class Objective:
                     args.append((k, "x", index[f"{d.name}.{k}"]))
             spec.append((d.name, d.dist.name, args))
 
-        def values(x, Z=None):
+        def values(x, Z=None, covariates=None):
             """Every quantity per unit: model parameters, one-value and varying quantities,
-            covariates, formulas."""
+            covariates (the data's, or ``covariates``: {name: (units,)}), formulas."""
             env = {}
             for n, v in base.items():
                 env[n] = jnp.full(n_units, float(v))
             for n, v in fit_values.items():
                 env[n] = jnp.full(n_units, x[v[1]] if isinstance(v, tuple) else float(v))
-            env.update(covs)
+            env.update(covs if covariates is None else covariates)
             for k, (name, dist, args) in enumerate(spec):
                 a = {}
                 for key, kind, v in args:
@@ -156,8 +156,8 @@ class Objective:
                 env[target] = jnp.broadcast_to(fn(*(env[k] for k in names)), (n_units,))
             return env
 
-        def model_params(x, Z=None):
-            env = values(x, Z)
+        def model_params(x, Z=None, covariates=None):
+            env = values(x, Z, covariates)
             return jnp.stack([env[n] for n in wrt], axis=1)
 
         self._unit_values = values
@@ -174,7 +174,7 @@ class Objective:
         self._wrt_arg = list(wrt) or [next(iter(m.params))]
         self._fs = sim.function(scenarios, wrt=self._wrt_arg)
         if not wrt:  # nothing reaches the model: still one function, at its own values
-            self._model_params = lambda x, Z=None: jnp.asarray(self._fs.x0)
+            self._model_params = lambda x, Z=None, covariates=None: jnp.asarray(self._fs.x0)
 
         # ---- links: predictions at the measurements, data, censoring, error model
         errors = {_key(e.lhs): e.model for e in problem._errors}

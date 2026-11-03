@@ -441,18 +441,23 @@ class Result:
 
         return passport(self)
 
-    def predict(self, *, regimen=None, times, outputs=None, name: str | None = None,
-                n: int = 200, between_units: bool = False):  # fmt: skip
+    def predict(self, *, regimen=None, times, outputs=None, covariates=None,
+                name: str | None = None, n: int = 200, between_units: bool = False,
+                seed: int = 0):  # fmt: skip
         """The model's outputs at ``times`` under ``regimen`` (a TenQSP regimen; None: the
         model's own doses), for the typical unit, with an interval from ``n`` draws: after
         ``nuts`` a posterior interval; after ``optimize`` and ``laplace`` approximate, from the
         standard errors. ``outputs``: observables (default: those the fit measures);
-        ``between_units=True`` adds a new unit's 90 % range; ``name`` keeps the prediction in
-        the passport. Returns a ``Prediction`` (``.table``, ``.plot()``)."""
+        ``covariates``: the covariate values to predict for, one number each (needed when the
+        fit uses covariates: ``covariates={"WT": 70}``); ``between_units=True`` adds a new
+        unit's 90 % range; ``name`` keeps the prediction in the passport; ``seed`` sets the
+        random draws (the same seed, the same prediction). Returns a ``Prediction``
+        (``.table``, ``.plot()``)."""
         from .predict import predict
 
-        return predict(self, regimen=regimen, times=times, outputs=outputs, name=name, n=n,
-                       between_units=between_units)  # fmt: skip
+        return predict(self, regimen=regimen, times=times, outputs=outputs,
+                       covariates=covariates, name=name, n=n, between_units=between_units,
+                       seed=seed)  # fmt: skip
 
     def plot_diagnostics(self):
         """One figure: goodness of fit, the visual predictive check (200 simulations), and the

@@ -88,7 +88,11 @@ def test_mistakes_are_named(pooled):
     with pytest.raises(ValueError, match="vary between units"):
         pooled.predict(times=T, between_units=True)
     with pytest.raises(TypeError):
-        pooled.predict(times=T, seed=1)  # unknown arguments raise
+        pooled.predict(times=T, draws=1)  # unknown arguments raise
+    with pytest.raises(TypeError, match="seed is a whole number"):
+        pooled.predict(times=T, seed=0.5)
+    with pytest.raises(ValueError, match="uses no covariates"):
+        pooled.predict(times=T, covariates={"WT": 70})
 
 
 def test_without_standard_errors_the_estimates_only(pooled):
@@ -119,3 +123,38 @@ def test_the_profile_prints_a_line_per_point(tmp_path, capsys):
     lines = [x for x in capsys.readouterr().out.splitlines() if x.strip().startswith("profile")]
     assert len(lines) == len(pr.table) - 1 == 4
     assert "below the estimate, point 1" in "".join(lines)
+
+
+def test_the_seed_sets_the_draws(pooled):
+    dose = tq.bolus("depot", 5.0, times=[0])
+    run = lambda seed: pooled.predict(regimen=dose, times=T, n=100, seed=seed).table  # noqa: E731
+    a, b, c = run(0), run(0), run(1)
+    np.testing.assert_array_equal(a["97.5 %"], b["97.5 %"])
+    assert not np.allclose(a["97.5 %"], c["97.5 %"])
+    np.testing.assert_allclose(a["median"], c["median"], rtol=0.05)  # the same curve, roughly
+
+
+COV = ("estimate A_ref = 8\nestimate A ~ lognormal(median=A_ref*(WT/70)^0.75, sdlog=0.2)\n"
+       "estimate B ~ normal(mean=0.5, sd=1)\nestimate k = 0.2\n")  # fmt: skip
+
+
+def test_a_prediction_for_given_covariates(tmp_path):
+    """A's median is A_ref (WT/70)^0.75: the typical unit of weight w is
+    A_ref (w/70)^0.75 exp(-k t) + B."""
+    r = tf.fit(lin_problem(tmp_path, correlate=False, estimate=COV, options="checks=quick"))
+    e = r.estimates
+    exact = copy.copy(r)
+    exact.cov_u = np.full_like(r.cov_u, np.nan)  # the estimates only: the curve exactly
+    for w in (50.0, 90):
+        pr = exact.predict(times=T, covariates={"WT": w})
+        typical = e["A_ref"] * (w / 70) ** 0.75 * np.exp(-e["k"] * T) + e["B.mean"]
+        np.testing.assert_allclose(pr.table["median"], typical, rtol=1e-6)
+        pr = r.predict(times=T, covariates={"WT": w}, between_units=True, n=50, name=f"WT {w}")
+        assert f"WT {w:g}" in pr.summary()
+    assert "WT 90" in repr(r.passport())
+    with pytest.raises(ValueError, match=r"uses the covariate WT; give the value.*'WT'"):
+        r.predict(times=T)
+    with pytest.raises(ValueError, match="'wt' is not a covariate of the fit.*WT"):
+        r.predict(times=T, covariates={"WT": 70, "wt": 70})
+    with pytest.raises(ValueError, match="one finite number"):
+        r.predict(times=T, covariates={"WT": "heavy"})

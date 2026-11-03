@@ -13,7 +13,11 @@ Each prediction is the model run once per set of values drawn from what the fit 
 The curves are the typical unit's (normal scores 0); with ``between_units=True``, each draw also
 gets a new unit (scores drawn from their distribution), which gives a new unit's 90 % range.
 They are the model's values, without the residual error: what the model says the unit does,
-not what one more measurement would read."""
+not what one more measurement would read.
+
+A fit with covariates predicts for the covariate values given (``covariates={"WT": 70}``): the
+typical unit, and a new unit, of that weight. The draws are random, from ``seed``: the same seed
+gives the same prediction."""
 
 from __future__ import annotations
 
@@ -43,6 +47,7 @@ class Prediction:
     failed: int
     between_units: bool
     regimen: str
+    covariates: dict = dataclasses.field(default_factory=dict)
 
     def summary(self) -> str:
         """One line: what was predicted, and how the interval was made."""
@@ -50,8 +55,9 @@ class Prediction:
         t = self.table.time
         failed = f"; {self.failed} of {self.n} runs failed, left out" if self.failed else ""
         units = "; with a new unit's 90 % range" if self.between_units else ""
-        return (f"{outs} from {t.min():.4g} to {t.max():.4g} ({self.regimen}); {self.kind}, "
-                f"{self.n} draws{units}{failed}")  # fmt: skip
+        covs = "".join(f"; {k} {v:.4g}" for k, v in self.covariates.items())
+        return (f"{outs} from {t.min():.4g} to {t.max():.4g} ({self.regimen}{covs}); "
+                f"{self.kind}, {self.n} draws{units}{failed}")  # fmt: skip
 
     def plot(self, *, log: bool = False):
         """One panel per output: the median, its 95 % band, and a new unit's 90 % range."""
@@ -82,8 +88,8 @@ class Prediction:
         return f"<Prediction {self.name}: {self.summary()}>"
 
 
-def predict(result, *, regimen=None, times, outputs=None, name=None, n: int = 200,
-            between_units: bool = False) -> Prediction:  # fmt: skip
+def predict(result, *, regimen=None, times, outputs=None, covariates=None, name=None,
+            n: int = 200, between_units: bool = False, seed: int = 0) -> Prediction:  # fmt: skip
     import tenqsp as tq
 
     from .errors import nearest
@@ -98,6 +104,8 @@ def predict(result, *, regimen=None, times, outputs=None, name=None, n: int = 20
         raise ValueError("predict: times are one increasing list of times.")
     if not isinstance(n, int) or n < 1:
         raise ValueError(f"predict: n is a positive whole number, got {n!r}.")
+    if isinstance(seed, bool) or not isinstance(seed, int | np.integer):
+        raise TypeError(f"predict: seed is a whole number, got {seed!r}.")
     if regimen is not None and not isinstance(regimen, tq.Regimen):
         raise TypeError("predict: regimen is a TenQSP regimen (tq.bolus(...), "
                         f"tq.infusion(...)), got {type(regimen).__name__}.")  # fmt: skip
@@ -107,18 +115,14 @@ def predict(result, *, regimen=None, times, outputs=None, name=None, n: int = 20
         if o not in known:
             raise ValueError(f"predict: '{o}' is not an observable of the model.{nearest(o, known)}"
                              f" Observables: {', '.join(known)}.")  # fmt: skip
-    if problem._covariates():
-        raise NotImplementedError(
-            "predict: the fit uses covariates, and a prediction for given covariate values is "
-            "not available yet (it predicts the typical unit)."
-        )
+    covariates = _covariates(problem, covariates)
     q = getattr(obj, "q", 0)
     if between_units and not q:
         raise ValueError("predict: between_units=True needs parameters that vary between units "
                          "(method laplace, or nuts on such a problem).")  # fmt: skip
 
     # ---- the draws of the quantities
-    rng = np.random.default_rng(0)  # the same draws every time
+    rng = np.random.default_rng(seed)
     draws = getattr(result, "draws", None)
     if draws is not None and len(draws):
         k = draws[list(result.names)].to_numpy()
@@ -149,12 +153,15 @@ def predict(result, *, regimen=None, times, outputs=None, name=None, n: int = 20
         sim_opts["atol"] = float(opts["atol"])
     fs = model.simulator(outputs=outputs, **sim_opts).function([scenario], wrt=cond._wrt_arg)
 
+    n_units = len(cond.units)
+    covs = {k: jnp.full(n_units, v) for k, v in covariates.items()} or None
+
     def typical(x):
-        return fs(cond._model_params(x, None)[:1])
+        return fs(cond._model_params(x, None, covs)[:1])
 
     def new_unit(x, e):
-        Z = jnp.broadcast_to(e @ jnp.linalg.cholesky(obj._R(x)).T, (len(cond.units), q))
-        return fs(cond._model_params(x, Z)[:1])
+        Z = jnp.broadcast_to(e @ jnp.linalg.cholesky(obj._R(x)).T, (n_units, q))
+        return fs(cond._model_params(x, Z, covs)[:1])
 
     runs = {"typical": jax.jit(jax.vmap(typical))}
     if between_units:
@@ -190,10 +197,43 @@ def predict(result, *, regimen=None, times, outputs=None, name=None, n: int = 20
     table = pd.concat(rows, ignore_index=True)
     label = name or "prediction"
     pr = Prediction(name=label, kind=kind, table=table, n=len(X), failed=failed,
-                    between_units=between_units, regimen=_regimen_text(regimen))  # fmt: skip
+                    between_units=between_units, regimen=_regimen_text(regimen),
+                    covariates=covariates)  # fmt: skip
     if name is not None:
         result.__dict__.setdefault("_predictions", {})[name] = pr
     return pr
+
+
+def _covariates(problem, given) -> dict:
+    """The covariate values to predict for: one number for each covariate the fit uses."""
+    from .errors import nearest
+
+    needed = list(problem._covariates())
+    if given is None:
+        given = {}
+    if not isinstance(given, dict):
+        raise TypeError(f"predict: covariates is a dict of values, e.g. {{'WT': 70}}, got "
+                        f"{type(given).__name__}.")  # fmt: skip
+    if not needed and given:
+        raise ValueError("predict: the fit uses no covariates, so covariates= has nothing to set.")
+    for k in given:
+        if k not in needed:
+            raise ValueError(f"predict: '{k}' is not a covariate of the fit.{nearest(k, needed)} "
+                             f"Its covariates: {', '.join(needed)}.")  # fmt: skip
+    missing = [k for k in needed if k not in given]
+    if missing:
+        example = ", ".join(f"'{k}': ..." for k in needed)
+        raise ValueError(f"predict: the fit uses the covariate{'s' if len(needed) > 1 else ''} "
+                         f"{', '.join(needed)}; give the value{'s' if len(needed) > 1 else ''} "
+                         f"to predict for: covariates={{{example}}} "
+                         f"(missing: {', '.join(missing)}).")  # fmt: skip
+    out = {}
+    for k in needed:
+        v = given[k]
+        if isinstance(v, bool) or not isinstance(v, int | float | np.number) or not np.isfinite(v):
+            raise ValueError(f"predict: covariate {k} is one finite number, got {v!r}.")
+        out[k] = float(v)
+    return out
 
 
 def _regimen_text(regimen) -> str:
