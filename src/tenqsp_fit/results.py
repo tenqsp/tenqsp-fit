@@ -137,17 +137,18 @@ def write_tables(result, folder) -> dict:
 
 
 # ----------------------------------------------------------------------------- goodness of fit
-def plot_gof(result):
+def plot_gof(result, fig=None):
     """One row per link: DV against PRED (with parameters that vary) and IPRED, with the
     line of identity; IWRES against TIME and against IPRED, with 0 and +-2. Censored values
-    are crosses at their limit (DV panels only)."""
+    are crosses at their limit (DV panels only). ``fig``: a figure (or subfigure) to draw in."""
     plt = _pyplot()
     tab = sdtab(result)
     links = list(dict.fromkeys(tab.link))
     population = _modes(result) is not None
     ncols = 4 if population else 3
-    fig, axes = plt.subplots(len(links), ncols, figsize=(3.3 * ncols, 3.1 * len(links)),
-                             squeeze=False)  # fmt: skip
+    if fig is None:
+        fig = plt.figure(figsize=(3.3 * ncols, 3.1 * len(links)))
+    axes = fig.subplots(len(links), ncols, squeeze=False)
     for row, lhs in zip(axes, links, strict=True):
         d = tab[tab.link == lhs]
         meas, cens = d[d.CENS == 0], d[d.CENS == 1]
@@ -171,8 +172,14 @@ def plot_gof(result):
             ax.set_ylabel("IWRES")
         row[0].set_title(lhs, loc="left", fontsize=10)
     fig.suptitle(f"{result.problem.name}: goodness of fit", fontsize=11)
-    fig.tight_layout()
+    _tight(fig)
     return fig
+
+
+def _tight(fig):
+    """Tight layout for a figure; a subfigure takes its parent's layout."""
+    if hasattr(fig, "tight_layout"):
+        fig.tight_layout()
 
 
 def plot_individual(result, units=None, *, ncols: int = 4, points: int = 200):
@@ -221,6 +228,22 @@ def plot_individual(result, units=None, *, ncols: int = 4, points: int = 200):
     return fig
 
 
+def plot_diagnostics(result):
+    """Goodness of fit, the VPC and the path of the fit, one above the other in one figure."""
+    plt = _pyplot()
+    cond = _cond(result)
+    n_links = len(cond._links)
+    from .live import _figsize
+
+    heights = [3.1 * n_links, 3.8, _figsize(result.names)[1]]
+    fig = plt.figure(figsize=(13.2, sum(heights) + 0.6), layout="constrained")
+    top, middle, bottom = fig.subfigures(3, 1, height_ratios=heights)
+    plot_gof(result, fig=top)
+    vpc(result, fig=middle)
+    result._draw_trace(fig=bottom)
+    return fig
+
+
 # ----------------------------------------------------------------------------- VPC
 @dataclasses.dataclass
 class VPC:
@@ -256,25 +279,30 @@ def _bins(t: np.ndarray, n_bins: int | None):
 
 
 def vpc(result, *, n: int = 200, seed: int = 0, bins: int | None = None,
-        percentiles=(5, 50, 95), interval: float = 0.95, log: bool = False) -> VPC:  # fmt: skip
+        percentiles=(5, 50, 95), interval: float = 0.95, log: bool = False,
+        fig=None) -> VPC:  # fmt: skip
     """Simulate the data ``n`` times from the fit (new units each time: scores drawn from
     their distribution and correlation; residual errors from the error model; the same
     doses, times and censoring limits), and compare the percentiles over time. After NUTS,
     each simulated study takes the quantities of a different posterior draw."""
     rng = np.random.default_rng(seed)
+    return simulate_vpc(result.problem.name, result.objective, _vpc_xs(result, n, rng), rng,
+                        bins=bins, percentiles=percentiles, interval=interval, log=log,
+                        title="visual predictive check", fig=fig)  # fmt: skip
+
+
+def _vpc_xs(result, n, rng):
+    """The quantities of each simulated study: the estimates, or after NUTS a draw each."""
     draws = getattr(result, "draws", None)
     if draws is not None and len(draws):
         k = draws[list(result.names)].to_numpy()
-        xs = k[rng.integers(0, len(k), n)]
-    else:
-        xs = np.tile(np.asarray(result.x, float), (n, 1))
-    return simulate_vpc(result.problem.name, result.objective, xs, rng, bins=bins,
-                        percentiles=percentiles, interval=interval, log=log,
-                        title="visual predictive check")  # fmt: skip
+        return k[rng.integers(0, len(k), n)]
+    return np.tile(np.asarray(result.x, float), (n, 1))
 
 
 def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95),
-                 interval=0.95, log=False, title="visual predictive check") -> VPC:  # fmt: skip
+                 interval=0.95, log=False, title="visual predictive check",
+                 fig=None) -> VPC:  # fmt: skip
     """The VPC's simulations and plot, one study per row of ``xs`` (the quantities)."""
     cond = getattr(objective, "_cond", objective)
     if any(lk["error"] is None for lk in cond._links):
@@ -347,7 +375,7 @@ def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95)
                 row[f"sim {tag} hi"] = float(np.quantile(sim_p[j], 1 - a))
             rows.append(row)
     table = pd.DataFrame(rows)
-    fig = _plot_vpc(name, table, cond, ptiles, interval, log, title)
+    fig = _plot_vpc(name, table, cond, ptiles, interval, log, title, fig)
     return VPC(table=table, figure=fig, n=n, percentiles=ptiles, failed=failed, ran=ran)
 
 
@@ -393,10 +421,12 @@ def prior_predictive(problem, *, n: int = 200, seed: int = 0, bins: int | None =
     return vp
 
 
-def _plot_vpc(name, table, cond, ptiles, interval, log, title):
+def _plot_vpc(name, table, cond, ptiles, interval, log, title, fig=None):
     plt = _pyplot()
     links = list(dict.fromkeys(table.link))
-    fig, axes = plt.subplots(1, len(links), figsize=(5.2 * len(links), 3.8), squeeze=False)
+    if fig is None:
+        fig = plt.figure(figsize=(5.2 * len(links), 3.8))
+    axes = fig.subplots(1, len(links), squeeze=False)
     mid = ptiles[len(ptiles) // 2]
     for ax, lhs in zip(axes[0], links, strict=True):
         d = table[table.link == lhs]
@@ -419,7 +449,7 @@ def _plot_vpc(name, table, cond, ptiles, interval, log, title):
         ax.set_title(f"{lhs}: data percentiles {', '.join(f'{p:g}' for p in ptiles)} (lines), "
                      f"simulated {interval:.0%} intervals (bands)", fontsize=8)  # fmt: skip
     fig.suptitle(f"{name}: {title}", fontsize=11)
-    fig.tight_layout()
+    _tight(fig)
     return fig
 
 
@@ -468,61 +498,6 @@ def _cut(level: float) -> float:
     return float(chi2.ppf(level, 1))
 
 
-def _at_estimates(problem, estimates: dict):
-    """A copy of ``problem`` whose starts are ``estimates`` (by quantity name)."""
-    from .distributions import ErrorModel, Fixed
-    from .problem import _Estimate
-
-    p = _copy(problem)
-    params = []
-    for d in p._params:
-        if isinstance(d, _Estimate) and d.dist is None and d.name in estimates:
-            d = dataclasses.replace(d, start=estimates[d.name])
-        elif isinstance(d, _Estimate) and d.dist is not None:
-            args = tuple((k, estimates.get(f"{d.name}.{k}", v) if isinstance(v, float) else v)
-                         for k, v in d.dist.args)  # fmt: skip
-            d = dataclasses.replace(d, dist=dataclasses.replace(d.dist, args=args))
-        params.append(d)
-    p._params = params
-    p._correlations = [
-        dataclasses.replace(c, start=estimates.get(f"corr({c.names[0]},{c.names[1]})", c.start))
-        if len(c.names) == 2 else c
-        for c in p._correlations
-    ]  # fmt: skip
-    errors = []
-    for e in p._errors:
-        args = [a if isinstance(a, Fixed) else estimates.get(f"{e.lhs}.{q}", a)
-                for q, a in zip(e.model.quantities, e.model.args, strict=True)]  # fmt: skip
-        errors.append(dataclasses.replace(e, model=ErrorModel(e.model.name, tuple(args))))
-    p._errors = errors
-    return p
-
-
-def _held(problem, name: str, value: float):
-    """A copy of ``problem`` with the quantity ``name`` held at ``value``."""
-    from .distributions import ErrorModel, Fixed
-    from .problem import _Estimate, _Fix
-
-    p = _copy(problem)
-    for i, d in enumerate(p._params):
-        if isinstance(d, _Estimate) and d.dist is None and d.name == name:
-            p._params[i] = _Fix(name, float(value))
-            return p
-        if isinstance(d, _Estimate) and d.dist is not None and name.startswith(f"{d.name}."):
-            key = name[len(d.name) + 1 :]
-            args = tuple((k, Fixed(float(value)) if k == key else v) for k, v in d.dist.args)
-            p._params[i] = dataclasses.replace(d, dist=dataclasses.replace(d.dist, args=args))
-            return p
-    for i, e in enumerate(p._errors):
-        if name.startswith(f"{e.lhs}."):
-            q = name[len(e.lhs) + 1 :]
-            args = [Fixed(float(value)) if qq == q else a
-                    for qq, a in zip(e.model.quantities, e.model.args, strict=True)]  # fmt: skip
-            p._errors[i] = dataclasses.replace(e, model=ErrorModel(e.model.name, tuple(args)))
-            return p
-    raise ValueError(f"profile: {name} cannot be held (a correlation is not profiled yet).")
-
-
 def _copy(problem):
     import copy
 
@@ -532,19 +507,17 @@ def _copy(problem):
     return p
 
 
-def _refit(problem):
-    """Fit without standard errors or progress (one point of a profile)."""
-    from .fit import _fit
-
-    return _fit(problem, progress="none", with_se=False)
-
-
 def profile(result, name: str, *, points: int = 8, step: float | None = None,
             level: float = 0.95) -> Profile:  # fmt: skip
     """Hold ``name`` at values on each side of its estimate (on its estimation scale, in
     steps of ``step``: by default half its standard error there, else 0.2), refit the rest
-    from the estimates, and stop a side once -2LL is past the cut-off (or after
-    ``points``)."""
+    from the neighbouring point, and stop a side once -2LL is past the cut-off (or after
+    ``points``). The model is compiled once for every point (``tenqsp_fit.held``), the two
+    sides run at the same time, and a line per point is printed (not with ``options
+    progress=none``)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .held import held_fitter
     from .optimize import to_u, to_x
 
     names = list(result.names)
@@ -552,31 +525,37 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
         from .errors import nearest
 
         raise ValueError(f"profile: '{name}' is not estimated.{nearest(name, names)}")
-    j = names.index(name)
-    sc = [result.scales[j]]
-    u_hat = float(to_u(np.array([result.x[j]]), sc)[0])
+    j, sc = names.index(name), result.scales
+    u_best = np.asarray(to_u(np.asarray(result.x, float), sc), float)
+    u_hat = float(u_best[j])
     if step is None:
         se_u = np.sqrt(np.diag(getattr(result, "cov_u", np.full((len(names),) * 2, np.nan))))[j]
         step = 0.5 * float(se_u) if np.isfinite(se_u) and se_u > 0 else 0.2
     cut = _cut(level)
-    start = _at_estimates(result.problem, result.estimates)
+    quiet = result.problem._options.get("progress") == "none"
     t0 = time.perf_counter()
+    fit = held_fitter(result, j)
+    fit(u_hat, u_best)  # compiles, at the estimate (a step or two), before the sides share it
 
     def side(sign):
-        out, est = [], dict(result.estimates)
+        out, start, warm = [], u_best, None
         for k in range(1, points + 1):
-            value = float(to_x(jnp.asarray([u_hat + sign * k * step]), sc)[0])
-            r = _refit(_held(_at_estimates(start, est), name, value))
-            est.update(r.estimates)
-            out.append({"value": value, "-2LL": r.m2ll, "status": r.status,
-                        **{n: v for n, v in r.estimates.items()}})  # fmt: skip
-            if not np.isfinite(r.m2ll) or r.m2ll - result.m2ll > cut:
+            u, m2ll, status, warm = fit(u_hat + sign * k * step, start, warm)
+            x = np.asarray(to_x(jnp.asarray(u), sc))
+            if np.isfinite(m2ll):
+                start = u
+            out.append({"value": float(x[j]), "-2LL": m2ll, "status": status,
+                        **{n: float(x[i]) for i, n in enumerate(names) if i != j}})  # fmt: skip
+            if not quiet:
+                print(f"   profile {name} = {x[j]:.4g}: -2LL {m2ll - result.m2ll:+.3g} from the "
+                      f"best ({'below' if sign < 0 else 'above'} the estimate, point {k}; "
+                      f"{time.perf_counter() - t0:.0f} s)", flush=True)  # fmt: skip
+            if not np.isfinite(m2ll) or m2ll - result.m2ll > cut:
                 break
         return out
 
-    # one side after the other: every point builds and compiles its own problem, and XLA
-    # compiling two models at once in one process has aborted it (a full test run)
-    lo_side, hi_side = side(-1), side(1)
+    with ThreadPoolExecutor(2) as pool:
+        lo_side, hi_side = pool.map(side, (-1, 1))
     centre = {"value": float(result.x[j]), "-2LL": result.m2ll, "status": "estimate",
               **result.estimates}  # fmt: skip
     table = pd.DataFrame([*reversed(lo_side), centre, *hi_side])

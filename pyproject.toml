@@ -26,7 +26,7 @@ dependencies = [
     "numpyro>=0.15",
     "optimistix>=0.0.9",
     "blackjax>=1.2",
-    "arviz>=0.18",
+    "arviz>=1.0",
     "pandas>=2.0",
     "scipy>=1.11",
 ]

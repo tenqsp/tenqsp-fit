@@ -322,7 +322,7 @@ def _result(problem, post, start, arr, chains, warmup, samples, status, notes, s
     flat_kept = kept.reshape(-1, post.p)
     stats, per_chain = _diagnostics(X, arr, warm)
     med = np.median(flat_kept, axis=0) if len(flat_kept) else np.full(post.p, np.nan)
-    modes = None
+    modes, Zs = None, None
     if post.q and len(flat_kept):
         zk = z[:, warm:].reshape(-1, post.d)
 
@@ -331,6 +331,14 @@ def _result(problem, post, start, arr, chains, warmup, samples, status, notes, s
 
         Zs = np.asarray(jax.vmap(scores)(jnp.asarray(zk)))
         modes = np.median(Zs, axis=0)
+        Zs = Zs.reshape(chains, kept.shape[1], post.n, post.q)
+    sample_stats = {  # per chain and draw, after warmup (ArviZ's names)
+        "diverging": arr["div"][:, warm:].astype(bool),
+        "energy": arr["energy"][:, warm:],
+        "lp": -arr["pe"][:, warm:],
+        "n_steps": arr["steps"][:, warm:],
+        "step_size": arr["step"][:, warm:],
+    }
     draws = pd.DataFrame(
         {
             "chain": np.repeat(np.arange(1, chains + 1), kept.shape[1]),
@@ -360,6 +368,7 @@ def _result(problem, post, start, arr, chains, warmup, samples, status, notes, s
         draws=draws, stats=stats, per_chain=per_chain, chains=chains, warmup=warmup,
         samples=samples, kept=kept.shape[1], priors=post.priors, start=start, notes=notes,
         posterior=post, inverse_mass=Minv, flat_draws=np.asarray(z[:, warm:]),
+        kept_draws=kept, unit_scores=Zs, sample_stats=sample_stats,
         shrinkage={},
     )  # fmt: skip
 
@@ -441,15 +450,40 @@ class PosteriorResult(Result):
     def plot_trace(self):
         """Each chain's path per quantity (and -2 log posterior), warmup and draws, the
         warmup's end dotted. Returns the figure."""
-        from .live import draw_trace
-
-        return draw_trace(self.trace, self.names, value="-2 log posterior", line="chain",
-                          xlabel="draw (warmup, then draws)", warmup=self.warmup,
-                          title=f"{self.problem.name}: nuts, {self.status}")  # fmt: skip
+        return self._draw_trace()
 
     def plot_waterfall(self, ax=None):
         raise ValueError("the waterfall is for multi-start fits; NUTS has chains: "
                          "result.plot_trace().")  # fmt: skip
+
+    def to_arviz(self):
+        """The posterior as ArviZ data (a DataTree): ``posterior`` (every quantity, and with
+        parameters that vary between units each unit's normal score ``z(name)``),
+        ``sample_stats`` (diverging, energy, lp, n_steps, step_size) and ``observed_data`` (the
+        measured values per link; censored ones left out), by chain and draw after warmup."""
+        import arviz as az
+
+        posterior = {n: self.kept_draws[:, :, i] for i, n in enumerate(self.names)}
+        coords, dims = {}, {}
+        if self.unit_scores is not None:
+            coords["unit"] = list(self.objective.units)
+            for k, (name, _) in enumerate(self.objective.varying):
+                posterior[f"z({name})"] = self.unit_scores[:, :, :, k]
+                dims[f"z({name})"] = ["unit"]
+        observed = {}
+        cond = getattr(self.objective, "_cond", self.objective)
+        for lk in cond._links:
+            observed[lk["lhs"]] = np.asarray(lk["dv"])[np.asarray(lk["obs"])]
+        return az.from_dict({"posterior": posterior, "sample_stats": self.sample_stats,
+                             "observed_data": observed}, coords=coords, dims=dims,
+                            name=self.problem.name)  # fmt: skip
+
+    def _draw_trace(self, fig=None):
+        from .live import draw_trace
+
+        return draw_trace(self.trace, self.names, value="-2 log posterior", line="chain",
+                          xlabel="draw (warmup, then draws)", warmup=self.warmup, fig=fig,
+                          title=f"{self.problem.name}: nuts, {self.status}")  # fmt: skip
 
     def profile(self, name, **kw):
         raise ValueError("profile is for likelihood fits (optimize, laplace); NUTS gives each "

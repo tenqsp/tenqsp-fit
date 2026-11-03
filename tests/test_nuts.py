@@ -348,3 +348,49 @@ def test_the_doctor_and_passport_after_nuts(sampled):
     assert [r["quantity"] for r in q] == ["ka", "CL", "ke"]
     assert all(r["determined"] == "yes" and "lognormal" in r["prior"] for r in q)
     assert "doctor:" in repr(sampled)
+
+
+@pytest.mark.timeout(1200)  # the first to ask for the samples runs them
+def test_to_arviz(sampled):
+    """The draws, the sampler's statistics and the data, by chain and draw."""
+    dt = sampled.to_arviz()
+    post = dt["posterior"]
+    assert dict(post.sizes) == {"chain": 4, "draw": 250}
+    d = sampled.draws
+    for name in sampled.names:
+        np.testing.assert_array_equal(post[name].values.ravel(), d[name].to_numpy())
+    ss = dt["sample_stats"]
+    assert int(ss["diverging"].values.sum()) == int(sampled.per_chain.divergences.sum())
+    assert {"energy", "lp", "n_steps", "step_size"} <= set(ss.data_vars)
+    np.testing.assert_allclose(dt["observed_data"]["conc"].values, table().DV.to_numpy())
+
+
+@pytest.mark.timeout(1200)  # the first to ask for the samples runs them
+def test_a_prediction_after_nuts_is_a_posterior_interval(sampled):
+    import tenqsp as tq
+
+    from tenqsp_fit import predict as P
+
+    t = np.linspace(0.5, 24, 12)
+    pr = sampled.predict(regimen=tq.bolus("depot", 5.0, times=[0]), times=t, n=1000)
+    assert pr.kind == P.POSTERIOR
+    # the oracle: the closed form at each posterior draw, its percentiles
+    d = sampled.draws[["ka", "CL", "ke"]].to_numpy()
+    curves = np.array([conc(t, 5.0, *v) for v in d])
+    for col, q in (("median", 50), ("2.5 %", 2.5), ("97.5 %", 97.5)):
+        np.testing.assert_allclose(pr.table[col], np.percentile(curves, q, axis=0), rtol=0.03)
+    fig = sampled.plot_diagnostics()
+    assert "nuts" in fig.subfigs[2]._suptitle.get_text()
+
+
+@pytest.mark.timeout(900)
+def test_to_arviz_with_units(tmp_path):
+    """Each unit's normal score per draw; their medians are the result's modes."""
+    p = lin_problem(tmp_path, correlate=False, options="seed=1 checks=quick")
+    p._method = None
+    p.method("nuts", chains=2, warmup=150, samples=100)
+    r = tf.fit(p)
+    dt = r.to_arviz()
+    z = dt["posterior"]["z(A)"]
+    assert z.dims == ("chain", "draw", "unit") and list(z.unit.values) == list(r.objective.units)
+    np.testing.assert_allclose(np.median(z.values.reshape(-1, z.shape[2]), axis=0), r.modes[:, 0])

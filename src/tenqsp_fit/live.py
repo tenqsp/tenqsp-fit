@@ -111,7 +111,8 @@ def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None, value: 
         ax.set_xlabel(xlabel, fontsize=8)
     if title:
         fig.suptitle(title, fontsize=10)
-    fig.tight_layout()
+    if hasattr(fig, "tight_layout"):  # a subfigure takes its parent's layout
+        fig.tight_layout()
     return fig
 
 

@@ -277,8 +277,7 @@ class Result:
     def plot_trace(self):
         """The path of the fit, as the live plot showed it: -2LL against the step and one
         panel per quantity, one line per start (the best dark). Returns the figure."""
-        return draw_trace(self.trace, self.names,
-                          title=f"{self.problem.name}: {self.method}, {self.status}")  # fmt: skip
+        return self._draw_trace()
 
     def plot_waterfall(self, ax=None):
         """The final -2LL of every start, sorted, above the best (the shaded band: within 0.1,
@@ -441,6 +440,36 @@ class Result:
         from .passport import passport
 
         return passport(self)
+
+    def predict(self, *, regimen=None, times, outputs=None, name: str | None = None,
+                n: int = 200, between_units: bool = False):  # fmt: skip
+        """The model's outputs at ``times`` under ``regimen`` (a TenQSP regimen; None: the
+        model's own doses), for the typical unit, with an interval from ``n`` draws: after
+        ``nuts`` a posterior interval; after ``optimize`` and ``laplace`` approximate, from the
+        standard errors. ``outputs``: observables (default: those the fit measures);
+        ``between_units=True`` adds a new unit's 90 % range; ``name`` keeps the prediction in
+        the passport. Returns a ``Prediction`` (``.table``, ``.plot()``)."""
+        from .predict import predict
+
+        return predict(self, regimen=regimen, times=times, outputs=outputs, name=name, n=n,
+                       between_units=between_units)  # fmt: skip
+
+    def plot_diagnostics(self):
+        """One figure: goodness of fit, the visual predictive check (200 simulations), and the
+        path of the fit (each start's, or each chain's). Returns the figure."""
+        from .results import plot_diagnostics
+
+        return plot_diagnostics(self)
+
+    def to_arviz(self):
+        """For ``method nuts``: the posterior as ArviZ data."""
+        raise ValueError(f"to_arviz is for a posterior (method nuts); this fit is "
+                         f"{self.method}, with estimates and standard errors: "
+                         "result.table().")  # fmt: skip
+
+    def _draw_trace(self, fig=None):
+        return draw_trace(self.trace, self.names, fig=fig,
+                          title=f"{self.problem.name}: {self.method}, {self.status}")  # fmt: skip
 
     def _doctor_lines(self) -> list[str]:
         d = getattr(self, "_doctor", None)
