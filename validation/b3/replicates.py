@@ -145,11 +145,22 @@ def replicate(design: str, seed: int, options: str, s_free: bool = False) -> dic
     return row
 
 
-def _k_beta_ridge(findings: str) -> bool:
-    return any(
-        f["check"] == "ridge" and {"k", "beta"} <= set(f["quantities"])
-        for f in json.loads(findings)
-    )
+def _ridge(pair):
+    def found(findings: str) -> bool:
+        return any(
+            f["check"] == "ridge" and set(pair) <= set(f["quantities"])
+            for f in json.loads(findings)
+        )
+
+    return found
+
+
+_k_beta_ridge = _ridge(("k", "beta"))
+_k_tau_ridge = _ridge(("k", "tau"))  # a delay traded against the infection rate
+
+
+def _several_optima(findings: str) -> bool:
+    return any(f["check"] == "several optima" for f in json.loads(findings))
 
 
 def _flags_s(findings: str) -> bool:
@@ -161,8 +172,9 @@ def _flags_s(findings: str) -> bool:
 
 def summary(df: pd.DataFrame) -> pd.DataFrame:
     """Per design (and s free or held): replicates, converged, with standard errors, k-beta
-    ridge reported, s flagged; per quantity the median log ratio to the truth and the 90 %
-    Wald coverage (over the replicates with a standard error)."""
+    and k-tau ridges reported, the correlation of log k and log tau over the replicates,
+    several optima reported, s flagged; per quantity the median log ratio to the truth and the
+    90 % Wald coverage (over the replicates with a standard error)."""
     out = []
     for (design, s_free), d in df.groupby(["design", "s_free"]):
         names = NAMES if s_free else NAMES[:-1]
@@ -173,6 +185,9 @@ def summary(df: pd.DataFrame) -> pd.DataFrame:
             converged=int((d.status == "converged").sum()),
             with_se=int((d.covariance == "ok").sum()),
             ridge_k_beta=float(d.findings.map(_k_beta_ridge).mean()),
+            ridge_k_tau=float(d.findings.map(_k_tau_ridge).mean()),
+            corr_log_k_tau=float(np.corrcoef(np.log(d.k), np.log(d.tau))[0, 1]),
+            several_optima=float(d.findings.map(_several_optima).mean()),
             s_flagged=float(d.findings.map(_flags_s).mean()) if s_free else np.nan,
             median_seconds=float(d.seconds.median()),
         )
