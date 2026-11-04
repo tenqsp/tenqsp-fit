@@ -45,6 +45,10 @@ from .errors import ProblemError
 __all__ = ["Objective", "objective"]
 
 ATOL = 1e-6  # TenQSP's default absolute tolerance
+# a limit on each solve's steps between two doses or events (TenQSP's max_steps): this many
+# times the most a unit takes at the starts, but not below STEP_FLOOR; TenQSP's own 100 000
+# above that
+STEP_FACTOR, STEP_FLOOR, STEP_MAX = 50, 5000, 100_000
 _LOG_2PI = math.log(2 * math.pi)
 
 
@@ -58,7 +62,9 @@ class Objective:
     (``obj.x0``: the starts). ``jax.grad``, ``jax.jit`` and ``jax.jacfwd`` work on it. A run
     that fails gives NaN; ``obj.status(x)`` gives one status per unit. ``obj.bounds``: the
     bounds of each quantity (``(-inf, inf)`` when none is given); ``obj.floor``: the level
-    below which predictions are floored (see the module notes)."""
+    below which predictions are floored (see the module notes); ``obj.max_steps``: the limit
+    on each solve's steps between two doses or events, 50 times the most a unit takes at
+    the starts (at least 5000, at most TenQSP's 100 000): a run that needs more fails."""
 
     def __init__(self, problem, *, _population: bool = False):
         from .problem import _Estimate, _Fix, _key
@@ -180,6 +186,16 @@ class Objective:
         self._fs = sim.function(scenarios, wrt=self._wrt_arg)
         if not wrt:  # nothing reaches the model: still one function, at its own values
             self._model_params = lambda x, Z=None, covariates=None: jnp.asarray(self._fs.x0)
+        # a trial point far out of range (an optimizer's k = 1e133) can need millions of
+        # steps: limit each solve to STEP_FACTOR times the work at the starts, so such a run
+        # fails (NaN, a rejected point) in seconds instead of running for hours
+        most = max(self._fs.steps(self._model_params(jnp.asarray(self.x0, dtype=jnp.float64))))
+        self.max_steps = min(STEP_MAX, max(STEP_FLOOR, STEP_FACTOR * most))
+        if self.max_steps < STEP_MAX:
+            sim = problem.model.simulator(
+                outputs=list(outputs), max_steps=self.max_steps, **sim_opts
+            )
+            self._sim, self._fs = sim, sim.function(scenarios, wrt=self._wrt_arg)
 
         # ---- links: predictions at the measurements, data, censoring, error model
         errors = {_key(e.lhs): e.model for e in problem._errors}

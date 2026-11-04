@@ -109,6 +109,26 @@ def test_gradient_against_finite_differences(data_file):
         np.testing.assert_allclose(float(g[i]), fd, rtol=1e-5)
 
 
+def test_a_limit_on_each_solves_steps(data_file, monkeypatch):
+    """A run that needs far more steps than at the starts fails (NaN, a rejected point):
+    with the limit at 1 times the starts' work, a 1e4 times faster absorption (a stiff
+    start) is over it; with the default 50 times (at least 5000), it runs."""
+    fit = "observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07\nerror conc ~ additive(0.3)"
+    x_far = lambda obj: jnp.asarray(obj.x0).at[0].multiply(1e4)  # noqa: E731
+    obj = tf.objective(make(data_file, fit))
+    assert 5000 <= obj.max_steps <= 100_000
+    assert np.isfinite(float(obj(x_far(obj))))
+    import tenqsp_fit.likelihood as L
+
+    monkeypatch.setattr(L, "STEP_FACTOR", 1)
+    monkeypatch.setattr(L, "STEP_FLOOR", 1)
+    tight = tf.objective(make(data_file, fit))
+    assert tight.max_steps < 1000
+    assert np.isfinite(float(tight(jnp.asarray(tight.x0))))
+    assert np.isnan(float(tight(x_far(tight))))
+    assert set(tight.status(x_far(tight)).values()) == {"too many steps"}
+
+
 def test_fixed_error_quantities_and_bounds(data_file):
     obj = tf.objective(
         make(
