@@ -73,7 +73,9 @@ from .optimize import (
     to_u,
     to_x,
     user_bounds,
+    watch,
 )
+from .problem import seconds
 
 __all__ = ["Laplace"]
 
@@ -413,25 +415,17 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
             messages[j] = f"ended: {res.message}"
 
     shown = _Progress(progress, names, n, "laplace", problem.name, trace)
-    status = None
     futures = [starts_pool.submit(run, j) for j in range(n)]
-    try:
-        while not all(f.done() for f in futures):
-            shown.update(steps, m2ll, X, done, time.perf_counter() - t_start)
-            time.sleep(0.25)
-        for f in futures:
-            f.result()
-    except KeyboardInterrupt:
-        stop.set()
-        status = "stopped"
-        for f in futures:
-            f.exception()
+    status, stopped_by = watch(futures, stop, seconds(opts.get("timeout")), t_start,
+                               lambda: shown.update(steps, m2ll, X, done,
+                                                    time.perf_counter() - t_start))  # fmt: skip
     starts_pool.shutdown()
     shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True, status=status)
 
     final = np.array([float(v) for v in pool.map(obj, list(X))])
     rank = final + np.array([float(pen(jnp.asarray(to_u(x, sc)))) for x in X])
-    run_ = _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status)
+    run_ = _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status,
+                stopped_by=stopped_by)  # fmt: skip
     best = int(np.argmin(np.where(np.isfinite(rank), rank, np.inf)))
     Z = obj.modes(X[best])
     pool.shutdown()

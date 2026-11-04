@@ -134,6 +134,37 @@ def test_ctrl_c_keeps_the_work(tmp_path, monkeypatch):
     assert "standard errors not computed: the fit was stopped" in repr(r)
 
 
+def test_a_time_limit_stops_the_fit_and_keeps_the_work(tmp_path):
+    """options timeout: when the time is up the starts stop after their step, as for Ctrl-C,
+    and the doctor says why."""
+    r = tf.fit(problem(tmp_path, options="starts=2 seed=1 timeout=0.001"))
+    assert r.status == "stopped" and np.isfinite(r.m2ll)
+    assert r.stopped_by == "the time limit (options timeout, 0.001 s)"
+    assert np.isnan(r.se).all() and r.covariance_status == O.STOPPED_SE
+    note = [f for f in r.doctor().findings if f.check == "stopped"][0]
+    assert "by the time limit" in note.message
+
+
+@pytest.mark.parametrize(
+    "value, seconds", [(90, 90.0), (1.5, 1.5), ("90s", 90.0), ("30min", 1800.0), ("2h", 7200.0)]
+)
+def test_a_time_limit_reads_seconds_or_a_time_with_its_unit(value, seconds):
+    from tenqsp_fit.problem import seconds as read
+
+    assert read(value) == seconds
+
+
+@pytest.mark.parametrize("value", ["2 hours", "h", 0, -5, "0s", True])
+def test_a_time_limit_that_cannot_be_read_is_refused(tmp_path, value):
+    p = problem(tmp_path, options="starts=1")
+    with pytest.raises(ValueError, match="timeout"):
+        p.options(timeout=value)
+
+
+def test_a_time_limit_from_text_is_shown_in_the_summary(tmp_path):
+    assert "timeout 2h" in str(problem(tmp_path, options="starts=1 timeout=2h").summary())
+
+
 def test_live_plot_page(tmp_path, monkeypatch, capsys):
     import re
     import webbrowser

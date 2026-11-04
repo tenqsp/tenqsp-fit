@@ -261,6 +261,15 @@ def test_method_and_problem_must_agree(tmp_path):
         tf.fit(p, method="optimize")
 
 
+def test_a_time_limit_stops_laplace_and_keeps_the_work(tmp_path):
+    from tenqsp_fit import optimize as O
+
+    r = tf.fit(lin_problem(tmp_path, options="timeout=0.001"))
+    assert r.status == "stopped" and np.isfinite(r.m2ll)
+    assert r.stopped_by.startswith("the time limit")
+    assert np.isnan(r.se).all() and r.covariance_status == O.STOPPED_SE
+
+
 def test_ctrl_c_keeps_the_work_with_laplace(tmp_path, monkeypatch):
     from tenqsp_fit import optimize as O
 

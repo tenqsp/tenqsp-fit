@@ -46,7 +46,7 @@ METHODS = {
 METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000}}
 # options with their defaults (printed in the summary; rule: no silent defaults)
 OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None,
-           "checks": "full"}  # fmt: skip
+           "checks": "full", "timeout": None}  # fmt: skip
 
 
 class _Text(str):
@@ -588,7 +588,10 @@ class Problem:
     def options(self, **options) -> None:
         """Solver and run options: ``rtol``, ``atol``, ``starts`` (multi-start), ``seed``,
         ``maxiter``, ``progress`` ("text", "plot" or "none"), ``checks`` ("full", or "quick":
-        the doctor leaves out its tolerance and gradient checks)."""
+        the doctor leaves out its tolerance and gradient checks), ``timeout`` (a time limit:
+        seconds, or text such as "90s", "30min", "2h"; off by default. When it is reached the
+        fit stops after the step each start is taking, as Ctrl-C does, and returns what it
+        has, marked "stopped")."""
         for k, v in options.items():
             if k not in OPTIONS:
                 raise TypeError(
@@ -604,6 +607,8 @@ class Problem:
             elif k == "checks":
                 if v not in ("full", "quick"):
                     raise ValueError(f"options: checks is 'full' or 'quick', got {v!r}.")
+            elif k == "timeout":
+                seconds(v)  # raises when it cannot be read
             elif not (isinstance(v, int) and not isinstance(v, bool) and v >= (k == "starts")):
                 raise ValueError(f"options: {k} must be a whole number, got {v!r}.")
             if k in self._options:
@@ -1533,6 +1538,28 @@ class Problem:
 
 def _arg(v) -> str:
     return _num(v) if isinstance(v, int | float) else str(v)
+
+
+_UNITS = {"s": 1.0, "min": 60.0, "h": 3600.0}
+
+
+def seconds(v) -> float | None:
+    """``options timeout`` in seconds: a number (seconds), or text such as "90s", "30min",
+    "2h"; None when it is not set."""
+    if v is None:
+        return None
+    if isinstance(v, int | float) and not isinstance(v, bool):
+        out = float(v)
+    else:
+        m = re.fullmatch(r"\s*(\d+\.?\d*|\.\d+)\s*(s|min|h)\s*", str(v))
+        if not m:
+            raise ValueError(
+                f"options: timeout is seconds or a time such as 90s, 30min or 2h, got {v!r}."
+            )
+        out = float(m[1]) * _UNITS[m[2]]
+    if not out > 0:
+        raise ValueError(f"options: timeout must be > 0, got {v!r}.")
+    return out
 
 
 def _opt(v) -> str:

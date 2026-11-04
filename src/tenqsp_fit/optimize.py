@@ -24,7 +24,9 @@
   elsewhere. ``progress plot`` (the default in a notebook): the live plot (``live.py``).
   ``progress none`` for quiet. The record is kept (``result.trace``,
   ``result.plot_trace()``), and Ctrl-C (or a notebook's stop) stops the fit and returns what
-  it has, marked "stopped", without standard errors.
+  it has, marked "stopped", without standard errors. ``options timeout=2h`` does the same when
+  the time is up (off by default: a large model may need hours); a step already being taken
+  is finished first.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ import optimistix as optx
 import pandas as pd
 
 from .live import default_progress, draw_trace
+from .problem import seconds
 
 __all__ = ["Result"]
 
@@ -596,7 +599,8 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
 
     total_jit = jax.jit(total)
     run = run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
-                     "optimize", const, problem.name, total_jit)  # fmt: skip
+                     "optimize", const, problem.name, total_jit,
+                     timeout=seconds(opts.get("timeout")), t_start=t_start)  # fmt: skip
     final = np.array([float(v) for v in ThreadPoolExecutor(len(U_start)).map(obj, list(run.X))])
     rank = final if penalty is None else np.array([float(total_jit(jnp.asarray(x)))
                                                    for x in run.X])  # fmt: skip
@@ -646,11 +650,13 @@ class _Run:
 
 
 def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers, label,
-               const=0.0, problem_name="", value=None) -> _Run:  # fmt: skip
+               const=0.0, problem_name="", value=None, timeout=None,
+               t_start=None) -> _Run:  # fmt: skip
     """Every start in its own thread (JAX runs them on separate cores), with the live text
     and Ctrl-C keeping the work. ``step(u, state) -> (u, state, done, ok, f)``; ``value(x)``,
-    -2LL at a start, gives the trace its step 0."""
-    t_start = time.perf_counter()
+    -2LL at a start, gives the trace its step 0. ``timeout``: seconds from ``t_start`` (the
+    fit's start) after which the starts stop as for Ctrl-C."""
+    t_start = time.perf_counter() if t_start is None else t_start
     n = len(U_start)
     m2ll = np.full(n, np.nan)
     X = np.array([np.asarray(to_x(jnp.asarray(u), sc)) for u in U_start])
@@ -682,22 +688,43 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
                 return
 
     shown = _Progress(progress, names, n, label, problem_name, trace)
-    status = None
     futures = [workers.submit(run, j) for j in range(n)]
-    try:
-        while not all(f.done() for f in futures):
-            shown.update(steps, m2ll, X, done, time.perf_counter() - t_start)
-            time.sleep(0.25)
-        for f in futures:
-            f.result()  # raises what a start raised
-    except KeyboardInterrupt:
-        stop.set()
-        status = "stopped"
-        for f in futures:
-            f.exception()  # wait for each start to finish its step
+    status, stopped_by = watch(futures, stop, timeout, t_start,
+                               lambda: shown.update(steps, m2ll, X, done,
+                                                    time.perf_counter() - t_start))  # fmt: skip
     workers.shutdown()
     shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True, status=status)
-    return _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status)
+    return _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status,
+                stopped_by=stopped_by)  # fmt: skip
+
+
+def watch(futures, stop, timeout, t_start, show) -> tuple[str | None, str | None]:
+    """Wait for the starts, showing progress; on Ctrl-C, or once ``timeout`` seconds have
+    passed since ``t_start``, set ``stop`` and wait for each start to finish its step.
+    Returns the status (None, or "stopped") and what stopped the fit."""
+    stopped_by = None
+    try:
+        while not all(f.done() for f in futures):
+            show()
+            if timeout is not None and time.perf_counter() - t_start > timeout:
+                stopped_by = f"the time limit (options timeout, {_duration(timeout)})"
+                break
+            time.sleep(0.25)
+        if stopped_by is None:
+            for f in futures:
+                f.result()  # raises what a start raised
+    except KeyboardInterrupt:
+        stopped_by = "Ctrl-C"
+    if stopped_by is None:
+        return None, None
+    stop.set()
+    for f in futures:
+        f.exception()  # wait for each start to finish its step
+    return "stopped", stopped_by
+
+
+def _duration(s: float) -> str:
+    return f"{s / 3600:g} h" if s >= 3600 else f"{s / 60:g} min" if s >= 60 else f"{s:g} s"
 
 
 def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, redrawn,
@@ -742,6 +769,7 @@ def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, 
         failed_runs=int(run.failed.sum()),
         n_observations=obj.n_observations,
         seconds=time.perf_counter() - t_start,
+        stopped_by=getattr(run, "stopped_by", None),
         near_bounds=near_bounds(names, X[best], bounds_written),
         **extra,
     )

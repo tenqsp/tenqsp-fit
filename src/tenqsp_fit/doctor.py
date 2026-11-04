@@ -128,8 +128,10 @@ def examine(result, *, quick: bool | None = None, say=None) -> Doctor:
     out: list[Finding] = []
     nuts = result.method == "nuts"
     if result.status == "stopped":
-        out.append(Finding("stopped", "note", "the fit was stopped before it ended: the "
-                           "findings are about where it stopped."))  # fmt: skip
+        by = getattr(result, "stopped_by", None)
+        out.append(Finding("stopped", "note", "the fit was stopped before it ended"
+                           + (f", by {by}" if by else "") + ": the findings are about where "
+                           "it stopped."))  # fmt: skip
     if nuts:
         out += _convergence(result)
         out += _contraction(result)

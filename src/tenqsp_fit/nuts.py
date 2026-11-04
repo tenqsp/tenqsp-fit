@@ -40,6 +40,7 @@ import pandas as pd
 from .live import default_progress
 from .optimize import Result, scales, to_u, to_x
 from .priors import lkj_log_density, priors
+from .problem import seconds
 
 __all__ = ["PosteriorResult", "fit_nuts"]
 
@@ -222,7 +223,8 @@ def fit_nuts(problem, *, progress=None) -> PosteriorResult:
     total = warmup + samples
     rec = {k: [] for k in ("z", "div", "steps", "pe", "energy", "step")}
     shown = _NutsProgress(progress, post.names, chains, warmup, total, problem.name)
-    done, status = 0, None
+    done, status, stopped_by = 0, None, None
+    timeout = seconds(opts.get("timeout"))
     try:
         while done < total:
             states, out = chunk(states)
@@ -230,13 +232,21 @@ def fit_nuts(problem, *, progress=None) -> PosteriorResult:
                 rec[k].append(np.asarray(v))
             done += CHUNK
             shown.update(rec, post, time.perf_counter() - t_start)
+            if done < total and timeout is not None and time.perf_counter() - t_start > timeout:
+                from .optimize import _duration
+
+                status = "stopped"
+                stopped_by = f"the time limit (options timeout, {_duration(timeout)})"
+                break
     except KeyboardInterrupt:
-        status = "stopped"
+        status, stopped_by = "stopped", "Ctrl-C"
     # (draws, chains, ...) -> (chains, draws, ...); the last chunk may overshoot
     arr = {k: np.swapaxes(np.concatenate(v), 0, 1)[:, :total] for k, v in rec.items() if v}
     shown.update(rec, post, time.perf_counter() - t_start, last=True, status=status)
-    return _result(problem, post, start, arr, chains, warmup, samples, status, notes,
-                   time.perf_counter() - t_start, Minv)  # fmt: skip
+    result = _result(problem, post, start, arr, chains, warmup, samples, status, notes,
+                     time.perf_counter() - t_start, Minv)  # fmt: skip
+    result.stopped_by = stopped_by
+    return result
 
 
 class _NutsProgress:
