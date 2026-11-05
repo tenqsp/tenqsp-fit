@@ -119,10 +119,14 @@ def test_the_diagnostics_figure(pooled, population):
 def test_the_profile_prints_a_line_per_point(tmp_path, capsys):
     r = tf.fit(problem(tmp_path, options="starts=1 checks=quick"))
     r.problem._options["progress"] = "text"
-    pr = r.profile("ke", points=2)
+    pr = r.profile("ke", points=2, scan=False)
     lines = [x for x in capsys.readouterr().out.splitlines() if x.strip().startswith("profile")]
     assert len(lines) == len(pr.table) - 1 == 4
     assert "below the estimate, point 1" in "".join(lines)
+    pr = r.profile("ke", points=2, scan_points=3)  # the scan's points too, refinements included
+    lines = [x for x in capsys.readouterr().out.splitlines() if x.strip().startswith("profile")]
+    assert len(lines) == len(pr.table) - 1 > 4
+    assert "scan 1 of 3" in "".join(lines)
 
 
 def test_the_seed_sets_the_draws(pooled):

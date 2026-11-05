@@ -159,7 +159,9 @@ def test_passport(pk_fit, tmp_path):
                       "The doctor's findings", "Numerical checks", "Named predictions",
                       "TenQSP's reports"]  # fmt: skip
     q = pp.to_dict()["quantities"]
-    assert [r["profile"] for r in q] == ["closed", "", ""]
+    # ka's set has a second piece at ke's value: in oral one-compartment PK, swapping ka and
+    # ke gives the same curve
+    assert [r["profile"] for r in q] == ["2 pieces, closed", "", ""]
     assert all(r["determined"] == "yes" for r in q)
     d = pp.to_dict()
     json.dumps(d, default=str)  # plain data

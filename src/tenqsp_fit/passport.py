@@ -217,7 +217,8 @@ FLAT = 1.0  # a profile side that rose by less than this (-2LL) is flat
 def _shape(prof) -> str:
     """A profile's shape: "closed" (past the cut-off on both sides); otherwise each side
     that did not reach the cut-off is "flat" (it rose by less than 1) or "not reached"
-    (rising, but the points profiled stop short: profile further)."""
+    (rising, but the points profiled stop short: profile further). A set in several pieces
+    says so first; a profile point better than the fit is added."""
     d = prof.table.sort_values("value")
     rise = d["-2LL"].to_numpy() - prof.m2ll
     sides = []
@@ -231,7 +232,13 @@ def _shape(prof) -> str:
             sides.append(f"flat {name}")
         else:
             sides.append(f"not reached {name} (profile further)")
-    return "closed" if not sides else ", ".join(sides)
+    text = "closed" if not sides else ", ".join(sides)
+    pieces = getattr(prof, "pieces", None) or []
+    if len(pieces) > 1:
+        text = f"{len(pieces)} pieces, {text}"
+    if getattr(prof, "better", None) is not None:
+        text += "; a better fit found"
+    return text
 
 
 def _prior(result, name: str) -> str:

@@ -104,7 +104,7 @@ def test_vpc_population_draws_new_units(population):
 def test_profile_matches_the_closed_form(pooled):
     """Each point: ke held, ka and CL refitted; -2LL above the minimum = (SSR - SSR_min)/sd^2
     of the closed-form least-squares fit at that ke."""
-    pr = pooled.profile("ke", points=3)
+    pr = pooled.profile("ke", points=3, scan=False)
     df = table()
 
     def ssr(ke):
@@ -133,6 +133,44 @@ def test_profile_interval_and_plot(pooled):
     assert "interval" in ax.get_title()
     with pytest.raises(ValueError, match="'kee' is not estimated.*ke"):
         pooled.profile("kee")
+
+
+def test_profile_scan_finds_the_flip_flop_optimum(tmp_path):
+    """Oral one-compartment PK: swapping ka and ke gives the same curve (flip-flop), so the
+    likelihood has a second optimum, exactly as good, at ka = the estimate of ke. The walk
+    stops at the hump between them; the scan finds the second piece of the set, which
+    mirrors ke's interval at the estimate."""
+    r = tf.fit(problem(tmp_path, options="starts=3 seed=1"))
+    e = r.estimates
+    walk = r.profile("ka", scan=False, level=0.9)
+    assert len(walk.pieces) == 1 and walk.pieces[0][0] > e["ke"]
+    pr = r.profile("ka", level=0.9, scan_points=12)
+    assert len(pr.pieces) == 2
+    (lo2, hi2), (lo1, hi1) = pr.pieces
+    np.testing.assert_allclose((lo1, hi1), walk.interval, rtol=1e-3)
+    ke = r.profile("ke", scan=False, level=0.9)
+    np.testing.assert_allclose((lo2, hi2), ke.interval, rtol=0.03)
+    assert pr.interval == (lo2, hi1)
+    assert pr.better is None  # the two optima are equally good
+    assert "2 pieces" in repr(pr)
+    d = r.doctor()
+    assert any(f.check == "profile in pieces" and "ka" in f.message for f in d.findings)
+    from tenqsp_fit.passport import _shape
+
+    assert _shape(pr).startswith("2 pieces, closed")
+    ax = pr.plot()
+    assert "2 pieces" in ax.get_title()
+
+
+def test_profile_scan_options(pooled):
+    pr = pooled.profile("CL", level=0.9, scan_range=(0.02, 0.08), scan_points=3)
+    assert len(pr.pieces) == 1
+    assert pr.scanned == pytest.approx((0.02, 0.08))
+    assert (pr.table.status == "scan").sum() >= 6
+    with pytest.raises(ValueError, match="low < high"):
+        pooled.profile("CL", scan_range=(0.08, 0.02))
+    with pytest.raises(TypeError, match="scan="):
+        pooled.profile("CL", scan="yes")
 
 
 def test_profile_small_sample_cut_off(tmp_path):

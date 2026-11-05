@@ -144,6 +144,7 @@ def examine(result, *, quick: bool | None = None, say=None) -> Doctor:
         out += _spreads(result)
         out += _shrinkage(result)
         out += _failed(result)
+        out += profile_findings(getattr(result, "_profiles", {}) or {})
     out += _jumps(result)
     if quick:
         out.append(Finding("tolerance and gradient checks", "note", "left out "
@@ -703,3 +704,33 @@ def _weak_posterior(result) -> list[Finding]:
     return [Finding("weakly determined", "warning", _and(weak) + ".",
                     "a written prior, or fix the quantity and say so; or measurements that "
                     "inform it.")]  # fmt: skip
+
+
+def profile_findings(profiles) -> list[Finding]:
+    """Findings from the profiles computed so far: a set in more than one piece (optima the
+    data cannot tell apart), and a profile point better than the fit (an optimum it
+    missed)."""
+    out = []
+    for name, prof in profiles.items():
+        pieces = getattr(prof, "pieces", None) or []
+        if len(pieces) > 1:
+            parts = " and ".join(f"({lo:.4g}, {hi:.4g})" for lo, hi in pieces)
+            out.append(Finding(
+                "profile in pieces", "warning",
+                f"the {prof.level:.0%} profile set of {name} has {len(pieces)} pieces, {parts}: "
+                "the likelihood has optima the data cannot tell apart.",
+                "report the whole set (profile.interval spans the pieces), not one optimum's "
+                "standard error; to separate the optima, more informative data (a design "
+                "that tells them apart) or prior knowledge.",
+                {"pieces": pieces}))  # fmt: skip
+        better = getattr(prof, "better", None)
+        if better is not None:
+            out.append(Finding(
+                "better fit in the profile", "problem",
+                f"the profile of {name} found a fit better than the estimate by "
+                f"{prof.m2ll - better['-2LL']:.3g} in -2LL, at {name} = {better['value']:.4g}: "
+                "the fit missed an optimum.",
+                "refit with more starts, or from the profile's best point "
+                "(profile.better has its values).",
+                {"value": better["value"], "-2LL": better["-2LL"]}))  # fmt: skip
+    return out

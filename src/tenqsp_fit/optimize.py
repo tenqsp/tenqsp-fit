@@ -406,16 +406,33 @@ class Result:
                    interval=interval, log=log)  # fmt: skip
 
     def profile(self, name: str, *, points: int = 8, step: float | None = None,
-                level: float = 0.95):  # fmt: skip
+                level: float = 0.95, scan: bool = True, scan_range=None,
+                scan_points: int = 8):  # fmt: skip
         """Profile likelihood of one estimated quantity: held at values on each side of its
-        estimate, the others refitted. Returns a ``Profile`` (``.table``, ``.interval``,
-        ``.cut``, ``.rule``, ``.plot()``). The interval's cut-off is the small-sample one
-        when the residual SD is estimated and the data are individual or pooled (see
-        ``Profile``); otherwise the chi-square one."""
+        estimate, the others refitted; then (``scan``, the default) scanned further out, so
+        that a second optimum shows as a second piece of the set. Returns a ``Profile``
+        (``.table``, ``.pieces``, ``.interval`` over all pieces, ``.cut``, ``.rule``,
+        ``.better``, ``.plot()``); ``scan=False``: the walk only (faster). The cut-off is the
+        small-sample one when the residual SD is estimated and the data are individual or
+        pooled (see ``Profile``); otherwise the chi-square one."""
         from .results import profile
 
-        prof = profile(self, name, points=points, step=step, level=level)
+        prof = profile(self, name, points=points, step=step, level=level, scan=scan,
+                       scan_range=scan_range, scan_points=scan_points)  # fmt: skip
         self.__dict__.setdefault("_profiles", {})[name] = prof  # the passport shows its shape
+        d = getattr(self, "_doctor", None)
+        if d is not None:  # the doctor already ran: add what this profile found
+            from .doctor import _ORDER, profile_findings
+
+            d.findings = [
+                f
+                for f in d.findings
+                if not f.message.startswith(
+                    (f"the {prof.level:.0%} profile set of {name} ", f"the profile of {name} ")
+                )
+            ]
+            d.findings = sorted([*d.findings, *profile_findings({name: prof})],
+                                key=lambda f: _ORDER[f.severity])  # fmt: skip
         return prof
 
     def save(self, folder):

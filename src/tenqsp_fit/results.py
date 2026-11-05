@@ -457,8 +457,17 @@ def _plot_vpc(name, table, cond, ptiles, interval, log, title, fig=None):
 @dataclasses.dataclass
 class Profile:
     """The profile likelihood of one quantity: ``table`` (each value held, -2LL with the
-    others refitted, and their estimates), ``interval`` (where -2LL is within ``cut`` of its
-    minimum; NaN on a side the profile did not reach), ``plot()``.
+    others refitted, and their estimates), ``pieces`` (each stretch of values where -2LL is
+    within ``cut`` of its minimum, in order; NaN at an end the profile did not reach),
+    ``interval`` (from the lowest to the highest value of the pieces), ``plot()``.
+
+    The profile walks out from the estimate on each side until -2LL is past the cut-off,
+    then (``scan``) goes on past each end, refitting the rest at each point from the
+    neighbouring point and from the ends of the fit's other starts: where the likelihood
+    has a second optimum beyond a hump higher than the cut-off, the set of values within
+    the cut-off has two pieces, and the walk alone sees only the one around the estimate.
+    ``better``: a point of the profile with -2LL lower than the fit's (by more than 0.01:
+    the fit missed a better optimum), or None; the cut-off is then from that point.
 
     ``cut`` and ``rule``: the chi-square cut-off (1 degree of freedom; 3.84 at 95 %) holds
     for large data. When the residual SD is estimated from few measurements it gives
@@ -479,30 +488,57 @@ class Profile:
     level: float
     cut: float = float("nan")
     rule: str = ""
+    pieces: list = dataclasses.field(default_factory=list)
+    scanned: tuple = (float("nan"), float("nan"))
+    better: dict | None = None
 
     def plot(self, ax=None):
         plt = _pyplot()
         if ax is None:
             _, ax = plt.subplots(figsize=(4.6, 3.3))
         d = self.table.sort_values("value")
-        ax.plot(d.value, d["-2LL"] - self.m2ll, "o-", color="#1f3b73", ms=4)
+        low = self._minimum()
+        walk = d[d.status != "scan"] if "status" in d else d
+        ax.plot(d.value, d["-2LL"] - low, "-", color="#1f3b73", lw=1)
+        ax.plot(walk.value, walk["-2LL"] - low, "o", color="#1f3b73", ms=4, label="walk")
+        scan = d[d.status == "scan"] if "status" in d else d.iloc[:0]
+        if len(scan):
+            ax.plot(scan.value, scan["-2LL"] - low, "o", mfc="white", color="#1f3b73", ms=4,
+                    label="scan")  # fmt: skip
+            ax.legend(fontsize=7, frameon=False)
         ax.axhline(self.cut, ls="--", color="#d62728", lw=1)
-        for v in self.interval:
-            if np.isfinite(v):
-                ax.axvline(v, ls=":", color="#d62728", lw=1)
+        for lo_, hi_ in self.pieces:
+            a = lo_ if np.isfinite(lo_) else d.value.min()
+            b = hi_ if np.isfinite(hi_) else d.value.max()
+            ax.axvspan(a, b, color="#d62728", alpha=0.08, lw=0)
         ax.axvline(self.estimate, color="0.5", lw=1)
+        if self.estimate > 0 and (d.value > 0).all() and d.value.max() / d.value.min() > 20:
+            ax.set_xscale("log")
         ax.set_xlabel(self.name)
         ax.set_ylabel("-2LL above the minimum")
-        lo, hi = self.interval
-        ax.set_title(f"{self.name}: {self.level:.0%} interval ({lo:.4g}, {hi:.4g})", fontsize=9)
+        ax.set_title(f"{self.name}: {self.level:.0%} {self._set_text()}", fontsize=9)
         ax.figure.tight_layout()
         return ax
 
-    def __repr__(self) -> str:
+    def _minimum(self) -> float:
+        return self.m2ll if self.better is None else float(self.better["-2LL"])
+
+    def _set_text(self) -> str:
+        if len(self.pieces) > 1:
+            parts = " and ".join(f"({lo:.4g}, {hi:.4g})" for lo, hi in self.pieces)
+            return f"set in {len(self.pieces)} pieces {parts}"
         lo, hi = self.interval
+        return f"interval ({lo:.4g}, {hi:.4g})"
+
+    def __repr__(self) -> str:
+        better = ""
+        if self.better is not None:
+            better = (f"; a better fit than the estimate at {self.name} = "
+                      f"{self.better['value']:.4g} (-2LL lower by "
+                      f"{self.m2ll - self.better['-2LL']:.3g})")  # fmt: skip
         return (f"<Profile of {self.name}: estimate {self.estimate:.4g}, {self.level:.0%} "
-                f"interval ({lo:.4g}, {hi:.4g}), {len(self.table)} points; cut-off "
-                f"{self.cut:.3g} ({self.rule})>")  # fmt: skip
+                f"{self._set_text()}, {len(self.table)} points; cut-off {self.cut:.3g} "
+                f"({self.rule}){better}>")  # fmt: skip
 
 
 def _cut(level: float, result=None) -> tuple[float, str]:
@@ -538,13 +574,18 @@ def _copy(problem):
 
 
 def profile(result, name: str, *, points: int = 8, step: float | None = None,
-            level: float = 0.95) -> Profile:  # fmt: skip
+            level: float = 0.95, scan: bool = True, scan_range=None,
+            scan_points: int = 8) -> Profile:  # fmt: skip
     """Hold ``name`` at values on each side of its estimate (on its estimation scale, in
     steps of ``step``: by default half its standard error there, else 0.2), refit the rest
     from the neighbouring point, and stop a side once -2LL is past the cut-off (or after
-    ``points``). The model is compiled once for every point (``tenqsp_fit.held``), the two
-    sides run at the same time, and a line per point is printed (not with ``options
-    progress=none``)."""
+    ``points``). Then (``scan``) go on past each end of the walk to ``scan_range`` (by
+    default 1/100 and 100 times the estimate, within its bounds; for a quantity of any sign,
+    20 steps beyond the walk) in ``scan_points`` points a side, each refitted from the
+    neighbouring point and from the ends of the fit's other starts (the best kept), and
+    each end of a piece found there found more closely by two halvings. The model is
+    compiled once for every point (``tenqsp_fit.held``), the two sides run at the same time,
+    and a line per point is printed (not with ``options progress=none``)."""
     from concurrent.futures import ThreadPoolExecutor
 
     from .held import held_fitter
@@ -555,6 +596,8 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
         from .errors import nearest
 
         raise ValueError(f"profile: '{name}' is not estimated.{nearest(name, names)}")
+    if not isinstance(scan, bool):
+        raise TypeError("profile: scan= is True or False.")
     j, sc = names.index(name), result.scales
     u_best = np.asarray(to_u(np.asarray(result.x, float), sc), float)
     u_hat = float(u_best[j])
@@ -567,49 +610,226 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     fit = held_fitter(result, j)
     fit(u_hat, u_best)  # compiles, at the estimate (a step or two), before the sides share it
 
+    def row(u, m2ll, status):
+        x = np.asarray(to_x(jnp.asarray(u), sc))
+        return {"value": float(x[j]), "-2LL": m2ll, "status": status,
+                **{n: float(x[i]) for i, n in enumerate(names) if i != j}}  # fmt: skip
+
+    def say(r, sign, what):
+        if not quiet:
+            print(f"   profile {name} = {r['value']:.4g}: -2LL {r['-2LL'] - result.m2ll:+.3g} "
+                  f"from the best ({'below' if sign < 0 else 'above'} the estimate, {what}; "
+                  f"{time.perf_counter() - t0:.0f} s)", flush=True)  # fmt: skip
+
     def side(sign):
-        out, start, warm = [], u_best, None
+        out, start, warm, u_end = [], u_best, None, u_hat
         for k in range(1, points + 1):
-            u, m2ll, status, warm = fit(u_hat + sign * k * step, start, warm)
-            x = np.asarray(to_x(jnp.asarray(u), sc))
+            u_end = u_hat + sign * k * step
+            u, m2ll, status, warm = fit(u_end, start, warm)
             if np.isfinite(m2ll):
                 start = u
-            out.append({"value": float(x[j]), "-2LL": m2ll, "status": status,
-                        **{n: float(x[i]) for i, n in enumerate(names) if i != j}})  # fmt: skip
-            if not quiet:
-                print(f"   profile {name} = {x[j]:.4g}: -2LL {m2ll - result.m2ll:+.3g} from the "
-                      f"best ({'below' if sign < 0 else 'above'} the estimate, point {k}; "
-                      f"{time.perf_counter() - t0:.0f} s)", flush=True)  # fmt: skip
+            r = row(u, m2ll, status)
+            out.append(r)
+            say(r, sign, f"point {k}")
             if not np.isfinite(m2ll) or m2ll - result.m2ll > cut:
                 break
+        if scan:
+            out += scanned(sign, u_end, start, out[-1]["-2LL"] if out else np.nan)
+        return out
+
+    others = _other_ends(result, sc, u_best)
+    lo_u, hi_u = _scan_range(result, j, sc, u_hat, step, scan_range)
+
+    def best_of(h, starts):
+        best = None
+        for st in starts:
+            u, m2ll, status, _ = fit(h, st)
+            if np.isfinite(m2ll) and (best is None or m2ll < best[1]):
+                best = (u, m2ll, status)
+        return best
+
+    def scanned(sign, u_from, start, f_from):
+        far = hi_u if sign > 0 else lo_u
+        if not np.isfinite(far) or (far - u_from) * sign <= 0:
+            return []
+        out = []
+
+        def at(h, starts, what="refining"):
+            got = best_of(h, starts)
+            if got is None:
+                return None, np.nan
+            out.append(row(got[0], got[1], "scan"))
+            say(out[-1], sign, what)
+            return got[0], got[1]
+
+        grid = u_from + (far - u_from) * np.arange(1, scan_points + 1) / scan_points
+        pts = [(u_from, start, f_from)]  # the walk's end
+        for k, h in enumerate(grid, start=1):
+            u, m2ll = at(h, [pts[-1][1], *others], f"scan {k} of {scan_points}")
+            pts.append((h, start if u is None else u, m2ll))
+        f = np.array([p_[2] for p_ in pts])
+        inside = lambda m: m - result.m2ll <= cut  # noqa: E731
+        for i in range(1, len(pts)):
+            a, b = pts[i - 1], pts[i]
+            # a dip between grid points: the bottom by golden section, then its piece's ends
+            dip = (i + 1 < len(pts) and np.isfinite(f[i]) and not (f[i - 1] <= f[i])
+                   and not (f[i + 1] <= f[i]))  # fmt: skip
+            if dip and not inside(f[i]):
+                best = _bottom(at, pts[i - 1][0], pts[i + 1][0], (b[0], b[1], f[i]), inside,
+                               others)  # fmt: skip
+                if inside(best[2]):
+                    for edge in (pts[i - 1], pts[i + 1]):
+                        _halve(at, best[0], best[1], edge[0], inside, others)
+            elif np.isfinite(f[i]) and np.isfinite(f[i - 1]) and inside(f[i]) != inside(f[i - 1]):
+                ins, outs = (b, a) if inside(f[i]) else (a, b)
+                _halve(at, ins[0], ins[1], outs[0], inside, others)
         return out
 
     with ThreadPoolExecutor(2) as pool:
         lo_side, hi_side = pool.map(side, (-1, 1))
     centre = {"value": float(result.x[j]), "-2LL": result.m2ll, "status": "estimate",
               **result.estimates}  # fmt: skip
-    table = pd.DataFrame([*reversed(lo_side), centre, *hi_side])
+    table = pd.DataFrame([*lo_side, centre, *hi_side]).sort_values("value", kind="stable")
     table = table[["value", "-2LL", "status", *[n for n in names if n != name]]]
-    interval = (_crossing(table, result.m2ll, cut, -1), _crossing(table, result.m2ll, cut, 1))
+    table = table.reset_index(drop=True)
+    low = float(np.nanmin(table["-2LL"]))
+    better = None
+    if low < result.m2ll - 0.01:
+        better = table.loc[int(np.nanargmin(table["-2LL"].to_numpy()))].to_dict()
+    floor = min(low, result.m2ll)
+    pieces = _pieces(table, floor, cut)
+    interval = (pieces[0][0], pieces[-1][1]) if pieces else (float("nan"), float("nan"))
+
+    def x_at(h):
+        u = u_best.copy()
+        u[j] = h
+        return float(np.asarray(to_x(jnp.asarray(u), sc))[j])
+
     p = Profile(name=name, estimate=float(result.x[j]), m2ll=result.m2ll, table=table,
-                interval=interval, level=level, cut=cut, rule=rule)  # fmt: skip
+                interval=interval, level=level, cut=cut, rule=rule, pieces=pieces,
+                scanned=(x_at(lo_u), x_at(hi_u)) if scan else (float("nan"),) * 2,
+                better=better)  # fmt: skip
     p.seconds = time.perf_counter() - t0
     return p
 
 
-def _crossing(table, m2ll, cut, sign) -> float:
-    """Where -2LL - minimum crosses ``cut`` on one side (linear between the points)."""
+def _bottom(at, lo, hi, best, inside, others, times: int = 8):
+    """The bottom of a dip between ``lo`` and ``hi`` (estimation scale) by golden section,
+    refitting from the best point so far; stops early once inside the cut-off. Returns the
+    best (value, solution, -2LL)."""
+    g = (3 - np.sqrt(5)) / 2
+    val = lambda m: m if np.isfinite(m) else np.inf  # noqa: E731
+    x1, x2 = lo + g * (hi - lo), hi - g * (hi - lo)
+    u1, f1 = at(x1, [best[1], *others])
+    u2, f2 = at(x2, [best[1], *others])
+    for _ in range(times):
+        for x, u, m in ((x1, u1, f1), (x2, u2, f2)):
+            if val(m) < val(best[2]):
+                best = (x, u, m)
+        if inside(best[2]):
+            break
+        if val(f1) < val(f2):  # the bottom is in (lo, x2)
+            hi, x2, u2, f2 = x2, x1, u1, f1
+            x1 = lo + g * (hi - lo)
+            u1, f1 = at(x1, [best[1], *others])
+        else:  # in (x1, hi)
+            lo, x1, u1, f1 = x1, x2, u2, f2
+            x2 = hi - g * (hi - lo)
+            u2, f2 = at(x2, [best[1], *others])
+    for x, u, m in ((x1, u1, f1), (x2, u2, f2)):
+        if val(m) < val(best[2]):
+            best = (x, u, m)
+    return best
+
+
+def _halve(at, h_in, u_in, h_out, inside, others, times: int = 4) -> None:
+    """Halve the stretch between a point inside the cut-off and one outside, ``times``
+    times, refitting from the inside point: an end of a piece, more closely."""
+    for _ in range(times):
+        mid = 0.5 * (h_in + h_out)
+        u, m = at(mid, [u_in, *others])
+        if u is None:
+            return
+        if inside(m):
+            h_in, u_in = mid, u
+        else:
+            h_out = mid
+
+
+def _other_ends(result, sc, u_best, most: int = 3) -> list:
+    """The ends of the fit's other starts (estimation scale), the lowest -2LL first, one per
+    optimum: where the scan also starts, so that it can fall into another optimum."""
+    from .optimize import to_u
+
+    st = getattr(result, "starts", None)
+    if st is None or not len(st):
+        return []
+    st = st[np.isfinite(st["-2LL"])].sort_values("-2LL")
+    out, seen = [], [u_best]
+    for _, r in st.iterrows():
+        try:
+            u = np.asarray(to_u(np.array([float(r[n]) for n in result.names]), sc), float)
+        except (ValueError, KeyError):
+            continue
+        if not np.all(np.isfinite(u)) or any(np.max(np.abs(u - v)) < 1e-3 for v in seen):
+            continue
+        seen.append(u)
+        out.append(u)
+        if len(out) == most:
+            break
+    return out
+
+
+def _scan_range(result, j, sc, u_hat, step, scan_range) -> tuple[float, float]:
+    """Where the scan ends on each side (estimation scale)."""
+    from .optimize import to_u
+
+    if scan_range is not None:
+        lo, hi = (float(v) for v in scan_range)
+        if not lo < hi:
+            raise ValueError("profile: scan_range is (low, high) with low < high.")
+        x = np.asarray(result.x, float)
+
+        def u_of(v):
+            y = x.copy()
+            y[j] = v
+            try:
+                return float(to_u(y, sc)[j])
+            except ValueError:
+                return float("nan")
+
+        return u_of(lo), u_of(hi)
+    kind = sc[j][0]
+    if kind in ("log", "above", "below"):
+        return u_hat - np.log(100.0), u_hat + np.log(100.0)
+    if kind == "logit":  # up to near the bounds
+        return -10.0, 10.0
+    return u_hat - 20 * step, u_hat + 20 * step
+
+
+def _pieces(table, m2ll, cut) -> list[tuple[float, float]]:
+    """Each stretch of values where -2LL - ``m2ll`` is within ``cut``, its ends found by
+    linear interpolation between neighbouring points; NaN at an end that is within the
+    cut-off at the last point."""
     d = table.sort_values("value")
+    d = d[np.isfinite(d["-2LL"])]
     v, f = d.value.to_numpy(), d["-2LL"].to_numpy() - m2ll
-    i0 = int(np.argmin(np.where(np.isfinite(f), f, np.inf)))
-    idx = range(i0, len(v)) if sign > 0 else range(i0, -1, -1)
-    prev = None
-    for i in idx:
-        if prev is not None and np.isfinite(f[i]) and f[i] >= cut > f[prev]:
-            w = (cut - f[prev]) / (f[i] - f[prev])
-            return float(v[prev] + w * (v[i] - v[prev]))
-        prev = i
-    return float("nan")
+    inside = f <= cut
+    out, start = [], None
+    for i in range(len(v)):
+        if inside[i] and start is None:
+            if i == 0:
+                start = float("nan")
+            else:
+                w = (cut - f[i - 1]) / (f[i] - f[i - 1])
+                start = float(v[i - 1] + w * (v[i] - v[i - 1]))
+        if not inside[i] and start is not None:
+            w = (cut - f[i - 1]) / (f[i] - f[i - 1])
+            out.append((start, float(v[i - 1] + w * (v[i] - v[i - 1]))))
+            start = None
+    if start is not None:
+        out.append((start, float("nan")))
+    return out
 
 
 # ----------------------------------------------------------------------------- save
