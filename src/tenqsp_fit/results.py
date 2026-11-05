@@ -582,10 +582,11 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     ``points``). Then (``scan``) go on past each end of the walk to ``scan_range`` (by
     default 1/100 and 100 times the estimate, within its bounds; for a quantity of any sign,
     20 steps beyond the walk) in ``scan_points`` points a side, each refitted from the
-    neighbouring point and from the ends of the fit's other starts (the best kept), and
-    each end of a piece found there found more closely by two halvings. The model is
-    compiled once for every point (``tenqsp_fit.held``), the two sides run at the same time,
-    and a line per point is printed (not with ``options progress=none``)."""
+    neighbouring point and from the ends of the fit's other starts (the best kept); the
+    bottom of a dip there is found by golden section and each end of a piece by four
+    halvings. The model is compiled once for every point (``tenqsp_fit.held``), the two sides
+    run at the same time, and a line per point is printed (not with ``options
+    progress=none``)."""
     from concurrent.futures import ThreadPoolExecutor
 
     from .held import held_fitter
