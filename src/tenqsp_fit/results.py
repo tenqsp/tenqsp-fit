@@ -457,8 +457,19 @@ def _plot_vpc(name, table, cond, ptiles, interval, log, title, fig=None):
 @dataclasses.dataclass
 class Profile:
     """The profile likelihood of one quantity: ``table`` (each value held, -2LL with the
-    others refitted, and their estimates), ``interval`` (95 %: where -2LL is within 3.84 of
-    its minimum; NaN on a side the profile did not reach), ``plot()``."""
+    others refitted, and their estimates), ``interval`` (where -2LL is within ``cut`` of its
+    minimum; NaN on a side the profile did not reach), ``plot()``.
+
+    ``cut`` and ``rule``: the chi-square cut-off (1 degree of freedom; 3.84 at 95 %) holds
+    for large data. When the residual SD is estimated from few measurements it gives
+    intervals that are too narrow (90 % intervals covered the truth in 79-86 % of fits of
+    one subject with 11 measurements). So for individual or pooled data (method optimize)
+    with an error-model quantity estimated and no likelihood written by hand, the cut-off
+    is the small-sample one, n log(1 + F/(n - p)) with F the ``level`` quantile of the F
+    distribution with 1 and n - p degrees of freedom, n the measurements (not censored)
+    and p the estimated quantities other than the error model's (Bates and Watts 1988,
+    profile t; as R's ``confint`` for ``nls``). It approaches the chi-square one as n grows.
+    """
 
     name: str
     estimate: float
@@ -466,6 +477,8 @@ class Profile:
     table: pd.DataFrame
     interval: tuple[float, float]
     level: float
+    cut: float = float("nan")
+    rule: str = ""
 
     def plot(self, ax=None):
         plt = _pyplot()
@@ -473,8 +486,7 @@ class Profile:
             _, ax = plt.subplots(figsize=(4.6, 3.3))
         d = self.table.sort_values("value")
         ax.plot(d.value, d["-2LL"] - self.m2ll, "o-", color="#1f3b73", ms=4)
-        cut = _cut(self.level)
-        ax.axhline(cut, ls="--", color="#d62728", lw=1)
+        ax.axhline(self.cut, ls="--", color="#d62728", lw=1)
         for v in self.interval:
             if np.isfinite(v):
                 ax.axvline(v, ls=":", color="#d62728", lw=1)
@@ -489,13 +501,31 @@ class Profile:
     def __repr__(self) -> str:
         lo, hi = self.interval
         return (f"<Profile of {self.name}: estimate {self.estimate:.4g}, {self.level:.0%} "
-                f"interval ({lo:.4g}, {hi:.4g}), {len(self.table)} points>")  # fmt: skip
+                f"interval ({lo:.4g}, {hi:.4g}), {len(self.table)} points; cut-off "
+                f"{self.cut:.3g} ({self.rule})>")  # fmt: skip
 
 
-def _cut(level: float) -> float:
+def _cut(level: float, result=None) -> tuple[float, str]:
+    """The profile's cut-off on -2LL above the minimum, and the rule (see ``Profile``)."""
     from scipy.stats import chi2
+    from scipy.stats import f as f_dist
 
-    return float(chi2.ppf(level, 1))
+    large = (float(chi2.ppf(level, 1)), "chi-square, 1 df")
+    if result is None or getattr(result, "method", None) != "optimize":
+        return large
+    problem = result.problem
+    if problem._likelihoods:
+        return large
+    errors = {f"{e.lhs}.{q}" for e in problem._errors for q in e.model.quantities}
+    if not any(n in errors for n in result.names):
+        return large
+    n = int(result.n_observations) - int(getattr(result, "n_censored", 0))
+    p = sum(1 for name in result.names if name not in errors)
+    df = n - p
+    if df < 1:
+        return large
+    F = float(f_dist.ppf(level, 1, df))
+    return float(n * np.log1p(F / df)), f"small sample: n {n}, p {p}, F(1, {df})"
 
 
 def _copy(problem):
@@ -531,7 +561,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     if step is None:
         se_u = np.sqrt(np.diag(getattr(result, "cov_u", np.full((len(names),) * 2, np.nan))))[j]
         step = 0.5 * float(se_u) if np.isfinite(se_u) and se_u > 0 else 0.2
-    cut = _cut(level)
+    cut, rule = _cut(level, result)
     quiet = result.problem._options.get("progress") == "none"
     t0 = time.perf_counter()
     fit = held_fitter(result, j)
@@ -562,7 +592,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     table = table[["value", "-2LL", "status", *[n for n in names if n != name]]]
     interval = (_crossing(table, result.m2ll, cut, -1), _crossing(table, result.m2ll, cut, 1))
     p = Profile(name=name, estimate=float(result.x[j]), m2ll=result.m2ll, table=table,
-                interval=interval, level=level)  # fmt: skip
+                interval=interval, level=level, cut=cut, rule=rule)  # fmt: skip
     p.seconds = time.perf_counter() - t0
     return p
 

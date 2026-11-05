@@ -135,6 +135,35 @@ def test_profile_interval_and_plot(pooled):
         pooled.profile("kee")
 
 
+def test_profile_small_sample_cut_off(tmp_path):
+    """With the residual SD estimated, the cut-off is n log(1 + F/(n - p)) and the interval
+    ends where the closed form's n log(SSR(ke) / SSR_min) (the SD profiled out) reaches it;
+    with the SD fixed, the chi-square cut-off (``test_profile_interval_and_plot``)."""
+    from scipy.stats import f as f_dist
+
+    r = tf.fit(problem(tmp_path, error="additive(0.3)", options="starts=1"))
+    df = table()
+    n, p = len(df), 3
+    pr = r.profile("ke", level=0.9)
+    cut = n * np.log1p(f_dist.ppf(0.9, 1, n - p) / (n - p))
+    assert pr.cut == pytest.approx(cut) and pr.rule.startswith("small sample")
+    assert cut > 2.706  # wider than chi-square
+
+    def ssr(ke):
+        def res(lx):
+            return conc(df.TIME.to_numpy(), df.Dose.to_numpy(), *np.exp(lx), ke) - df.DV.to_numpy()
+
+        fit = least_squares(res, np.log([1.5, 0.04]), xtol=1e-14, ftol=1e-14, gtol=1e-14)
+        return float(np.sum(fit.fun**2))
+
+    base = ssr(r.estimates["ke"])
+    for end in pr.interval:  # linear between profile points: to within a few %
+        assert np.isfinite(end)
+        assert n * np.log(ssr(end) / base) == pytest.approx(cut, rel=0.05)
+    fixed = tf.fit(problem(tmp_path, options="starts=1")).profile("ke", level=0.9)
+    assert fixed.cut == pytest.approx(2.7055, abs=1e-4) and fixed.rule == "chi-square, 1 df"
+
+
 def test_save(pooled, tmp_path):
     out = pooled.save(tmp_path / "run1")
     names = {p.name for p in out.iterdir()}

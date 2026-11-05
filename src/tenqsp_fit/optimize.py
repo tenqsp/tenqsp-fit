@@ -409,7 +409,9 @@ class Result:
                 level: float = 0.95):  # fmt: skip
         """Profile likelihood of one estimated quantity: held at values on each side of its
         estimate, the others refitted. Returns a ``Profile`` (``.table``, ``.interval``,
-        ``.plot()``)."""
+        ``.cut``, ``.rule``, ``.plot()``). The interval's cut-off is the small-sample one
+        when the residual SD is estimated and the data are individual or pooled (see
+        ``Profile``); otherwise the chi-square one."""
         from .results import profile
 
         prof = profile(self, name, points=points, step=step, level=level)
@@ -768,6 +770,7 @@ def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, 
         redrawn=redrawn,
         failed_runs=int(run.failed.sum()),
         n_observations=obj.n_observations,
+        n_censored=obj.n_censored,
         seconds=time.perf_counter() - t_start,
         stopped_by=getattr(run, "stopped_by", None),
         near_bounds=near_bounds(names, X[best], bounds_written),
