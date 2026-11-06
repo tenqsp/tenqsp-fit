@@ -1,0 +1,74 @@
+site_name: tenqsp-fit
+site_description: Fitting TenQSP models to data, with a diagnosis of what the data determine
+repo_url: https://github.com/tenqsp/tenqsp-fit
+repo_name: tenqsp/tenqsp-fit
+edit_uri: ""
+docs_dir: docs
+strict: true
+validation:
+  anchors: warn
+
+exclude_docs: |
+  /examples/*.py
+  /examples/theoph_run/
+
+theme:
+  name: material
+  features:
+    - content.tabs.link        # choosing "Python" in one tab pair chooses it everywhere
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/weather-sunny, name: Light mode}
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.arithmatex: {generic: true}
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed: {alternate_style: true}
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
+
+plugins:
+  - search
+
+nav:
+  - Start here:
+      - index.md
+      - Install: start/install.md
+      - "Quickstart: a population PK fit": start/quickstart-population.md
+      - "Quickstart: a QSP model with a structured population": start/quickstart-qsp.md
+  - Guide:
+      - The data: guide/data.md
+      - Estimates, distributions and errors: guide/estimates.md
+      - While a fit runs: guide/running.md
+      - Results: guide/results.md
+      - The doctor and the passport: guide/doctor.md
+      - In Python: guide/python.md
+      - For NONMEM users: guide/nonmem.md
+  - Methods:
+      - optimize: methods/optimize.md
+      - laplace: methods/laplace.md
+      - nuts: methods/nuts.md
+  - Not yet: not-yet.md
+  - Decision records:
+      - adr/README.md
+      - "0001 optimize defaults": adr/0001-optimize-defaults.md
+      - "0002 laplace defaults": adr/0002-laplace-defaults.md
+      - "0003 nuts defaults": adr/0003-nuts-defaults.md
+      - "0004 profile likelihood": adr/0004-profile-likelihood.md

@@ -25,3 +25,6 @@ docs/tutorials/*.ipynb
 # documentation site (mkdocs build)
 site/
 .cache/
+
+# docs: the folder written by the quickstart example
+docs/examples/theoph_run/

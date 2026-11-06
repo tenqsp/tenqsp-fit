@@ -1,0 +1,29 @@
+# Bacteria, phage-infected cells by infection age, and free phage (synthetic example)
+model infection_age
+axis a in [0, 2] n=100 kind=one_way
+param g=1, k=5e-8, beta=50, tau=0.5, s=0.05
+param K=1e9, delta=0.1, hmax=30
+h(a) = hmax/(1 + exp(-(a - tau)/s))
+field I(a)
+d_t(S) = g*S*(1 - S/K) - k*S*P
+d_t(I) = -d_a(I) - h*I        using sharp
+    at a=0: I = k*S*P
+    at a=2: outflow
+d_t(P) = beta*int_a(h*I) - k*S*P - delta*P
+S(0) = 1e6
+P(0) = 1e4
+observable bact = S + int_a(I)
+observable phage = P
+
+fit timekill
+data "timekill.csv"
+observe log10(bact) = DV where DVID == "bact"
+observe log10(phage) = DV where DVID == "phage"
+censor log10(bact) where BLQ == 1 below 2
+
+estimate g = 0.8, k = 1e-7, beta = 30, tau = 0.4
+error log10(bact) ~ additive(0.2)
+error log10(phage) ~ additive(0.2)
+
+method optimize
+options starts=4 seed=1 rtol=1e-8
