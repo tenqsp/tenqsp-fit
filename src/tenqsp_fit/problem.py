@@ -44,7 +44,7 @@ METHODS = {
 }
 # a method's options with their defaults (printed in the summary)
 METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000}}
-CONSTANTS = {"pi": 3.141592653589793, "e": 2.718281828459045}  # names users may expect
+CONSTANTS = {"e": "exp(1)"}  # names users may expect (TenQSP knows pi, not e)
 # options with their defaults (printed in the summary; rule: no silent defaults)
 OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None,
            "checks": "full", "timeout": None}  # fmt: skip
@@ -1131,10 +1131,10 @@ class Problem:
         }
 
     def _unknown_in_formula(self, n: str, where: str, columns: set[str]) -> str:
-        if n in CONSTANTS:  # TenQSP formulas have no named constants
+        if n in CONSTANTS:
             return (
-                f"{where}: '{n}' is not a known name: formulas have no named constants. "
-                f"Write the number instead: {CONSTANTS[n]!r}."
+                f"{where}: '{n}' is not a known name: formulas have pi but no constant '{n}'. "
+                f"Write {CONSTANTS[n]} instead."
             )
         if n in self._m.definitions:
             return f"{where}: '{n}' is a formula of the model, not a quantity of the fit."

@@ -88,6 +88,10 @@ warning  several optima: the starts ended at 2 different fits: -2LL -34.5421 (3 
          what to do: if few starts reached the best, run more starts (options starts=); compare the fits in result.starts.
 ```
 
+When the next fit is within 3.84 of the best (the profile's cut-off), the data hardly prefer
+one fit: the standard errors describe the best fit only, and the advice adds that a
+[profile](results.md#profile-likelihood) gives an interval covering the values of both.
+
 With one start, a note says other optima were not looked for. `result.plot_waterfall()` shows
 the same.
 

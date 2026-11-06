@@ -382,7 +382,7 @@ def test_method_must_suit(folder):
 
 def test_written_likelihood_with_varying_parameters(folder):
     """A written likelihood with parameters that vary between units is refused by check()
-    (laplace and nuts), not when the fit starts; 'pi' gets the number, not 'estimate pi'."""
+    (laplace and nuts), not when the fit starts. pi is known; 'e' gets exp(1), not 'estimate e'."""
     p = python_problem(folder)
     p._errors.clear()
     p.likelihood("conc", "-0.5*((DV - conc)/0.7)^2 - log(0.7) - 0.5*log(2*pi)")
@@ -390,8 +390,15 @@ def test_written_likelihood_with_varying_parameters(folder):
         p.check()
     msg = str(e.value)
     assert "written likelihood with parameters that vary between units (method laplace)" in msg
-    assert "'pi' is not a known name" in msg and "3.141592653589793" in msg
-    assert "estimate pi" not in msg
+    assert "pi" not in msg
+    p._likelihoods.clear()
+    p.likelihood("conc", "-0.5*((DV - conc)/0.7)^2 - log(0.7*sqrt(2*pi*e))")
+    with pytest.raises(tf.ProblemError) as e:
+        p.check()
+    assert "'e' is not a known name: formulas have pi but no constant 'e'. Write exp(1)" in str(
+        e.value
+    )
+    assert "estimate e" not in str(e.value)
 
 
 # ----------------------------------------------------------------------------- distributions

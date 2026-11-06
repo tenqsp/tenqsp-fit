@@ -1,6 +1,6 @@
 # ADR 0003 — The defaults of `method nuts`
 
-- **Status:** Proposed, in use since 0.1 (2026-11-02).
+- **Status:** Accepted 2026-11-06; in use since 0.1 (2026-11-02).
 - **Code:** `src/tenqsp_fit/nuts.py`, `src/tenqsp_fit/priors.py`.
 
 ## Context

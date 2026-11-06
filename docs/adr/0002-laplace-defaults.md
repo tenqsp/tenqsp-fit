@@ -1,6 +1,6 @@
 # ADR 0002 — The defaults of `method laplace`
 
-- **Status:** Proposed, in use since 0.1 (2026-11-01).
+- **Status:** Accepted 2026-11-06; in use since 0.1 (2026-11-01).
 - **Code:** `src/tenqsp_fit/laplace.py`.
 
 ## Context
@@ -8,7 +8,8 @@
 `method laplace` fits populations: parameters vary between units with an estimated
 distribution. Pharmacometricians expect NONMEM's FOCE-I objective and its standard errors,
 and results that agree with NONMEM, nlme and Monolix on standard data. TenQSP gives exact
-first derivatives of the solution, not yet second derivatives.
+first derivatives of the solution; the Hessians below come from differences of those exact
+first derivatives (TenQSP's own second derivatives, through `jax.hessian`, came later).
 
 ## Options considered
 
@@ -50,4 +51,5 @@ first derivatives of the solution, not yet second derivatives.
 - −2LL is comparable with NONMEM's OFV after adding n log 2π.
 - Each outer step costs 2p + 2q extra model evaluations (p estimated quantities, q varying
   parameters), batched into one call.
-- When TenQSP gains second derivatives of the solution, the differences can be replaced.
+- The differences could be replaced by TenQSP's exact second derivatives, once their cost
+  has been measured against the differences.

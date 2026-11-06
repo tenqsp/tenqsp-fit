@@ -354,12 +354,21 @@ def _optima(result) -> list[Finding]:
     if len(groups) == 1:
         return [Finding("optima", "note", f"all {len(ok)} starts reached the same fit{lost}.")]
     parts = [f"-2LL {g[0]:.4f} ({len(g)} start{'s' * (len(g) != 1)})" for g in groups]
+    from .results import CHI2_95
+
+    what = (
+        f"the next fit is within {CHI2_95:.2f} of the best, so the data hardly prefer one: the "
+        "standard errors describe the best fit only, while a profile (result.profile(name)) "
+        "gives an interval that covers the values of both fits. "
+        if groups[1][0] - groups[0][0] < CHI2_95
+        else ""
+    )
     return [Finding(
         "several optima", "warning",
         f"the starts ended at {len(groups)} different fits: {', '.join(parts)}{lost}; the "
         "best is reported.",
-        "if few starts reached the best, run more starts (options starts=); compare the "
-        "fits in result.starts.",
+        f"{what}if few starts reached the best, run more starts (options starts=); compare "
+        "the fits in result.starts.",
         {"optima": [float(g[0]) for g in groups], "starts": [len(g) for g in groups]},
     )]  # fmt: skip
 

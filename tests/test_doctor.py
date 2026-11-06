@@ -190,6 +190,15 @@ def test_flat_directions_sharing_quantities_are_one_finding():
 def test_optima_are_measured_from_each_best():
     f = Dr._optima(SimpleNamespace(starts=pd.DataFrame({"-2LL": [1.0, 1.08, 1.15]})))[0]
     assert f.check == "several optima" and f.evidence["starts"] == [2, 1]
+    assert "result.profile(name)" in f.remedy  # 0.15 apart: well within the cut-off 3.84
+
+
+def test_profile_advised_only_when_another_optimum_is_close():
+    def advice(m2ll):
+        return Dr._optima(SimpleNamespace(starts=pd.DataFrame({"-2LL": m2ll})))[0].remedy
+
+    assert "the next fit is within 3.84 of the best" in advice([-34.5, -32.0, -34.5])
+    assert "profile" not in advice([-34.5, -24.8, -34.5])  # the QSP quickstart's two fits
 
 
 def test_profile_shapes():

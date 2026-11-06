@@ -1,6 +1,6 @@
 # ADR 0001 — The defaults of `method optimize`
 
-- **Status:** Proposed, in use since 0.1 (2026-11-01).
+- **Status:** Accepted 2026-11-06; in use since 0.1 (2026-11-01).
 - **Code:** `src/tenqsp_fit/optimize.py`, `src/tenqsp_fit/likelihood.py`.
 
 ## Context
@@ -35,8 +35,9 @@ optimizer, the scale each quantity is estimated on, and how many starts.
   is fixed: −2LL is then a sum of squares up to a constant, censored values included as
   `sqrt(−2 log Φ((limit − f)/sd))`. **BFGS** with the exact gradient when an error-model
   quantity is estimated.
-- **Scales:** a bounded quantity on the logit scale within its bounds, a positive start on
-  the log scale, otherwise as written. The summary lists each scale.
+- **Scales:** a quantity with two bounds on the logit scale within them, one with a bound
+  on one side as `lo + exp(u)` or `hi - exp(u)`, a positive start on the log scale, otherwise
+  as written. The summary lists each scale.
 - **Starts:** start 1 is the values written; the others are drawn around them (log scale:
   95 % within a factor 5 either way), with a seed; a start whose model run fails is drawn
   again (up to 20 times). Default 1 start (the user's values), with the doctor's note that
@@ -52,3 +53,7 @@ optimizer, the scale each quantity is estimated on, and how many starts.
   safer choice at a modest cost.
 - Results always report −2LL, whichever optimizer ran.
 - A global stage remains a candidate for a later version.
+- Where two optima are close in −2LL (within the profile cut-off, 3.84), the doctor's
+  "several optima" warning advises a profile interval: in simulation studies of the
+  infection-age model, Wald intervals at the best fit covered the truth less often than
+  nominal when the data narrowly favoured a second optimum.
