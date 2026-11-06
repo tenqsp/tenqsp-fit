@@ -8,6 +8,7 @@ whether the numbers can be trusted. The findings end the printout of the result;
 ```text
 doctor: 3 notes
 note     determination: condition number of the curvature 39.1; no ridge, every quantity determined within a factor 10.
+eigenvalues of the correlation matrix of the estimates: 0.449, 0.929, 0.973, 1, 1.06, 1.59 (largest over smallest 3.53)
 note     optima: one start: other optima were not looked for.
          what to do: options starts=8 looks from 8 starts.
 note     tolerance check: at rtol 1e-08 the -2LL changes by 2.2e-05 and the estimates by less than 0.001 SE; rtol 1e-06 is enough.
@@ -176,8 +177,12 @@ only if nothing switches near the estimate: check a profile of the quantities in
 
 ### Failed runs
 
-A **note** with the number of model runs that failed during the fit (steps the optimizer
-refused). A few are normal: an optimizer tries values far out of range.
+The model runs that failed during the fit (steps the optimizer refused), out of all the runs
+it made, with their causes as TenQSP gives them (for the first 50). A few are normal: an
+optimizer tries values far out of range. A **note** up to 1 % of the runs; above that a
+**warning**: the fit spent much of its work where the model does not run, and may have
+stopped at the edge of that region. `obj.status(x)` (with `obj = tf.objective(problem)`)
+says why a run fails at given values.
 
 ### After `nuts`
 
@@ -204,11 +209,11 @@ it as `passport.md` and `passport.json`. Its sections:
 
 | Section | Holds |
 |---|---|
-| The run | method, optimizer, status, −2LL, options, the SHA-256 of the problem text and of the data as read, versions, platform, time |
+| The run | method, optimizer, status, −2LL, options, the SHA-256 of the problem text, the data file with its SHA-256, column map and rows (measured, linked, doses, left out by `ignore`), the SHA-256 of the data as read, versions, platform, time, what the smooth floor keeps above 0 |
 | Each quantity | estimate, SE, 95 % interval, whether it is determined (`yes`, `weakly`, `not (ridge)`), its profile's shape when one was computed, its prior |
-| Ridges and determined combinations | the ridges, and the condition number |
+| Ridges and determined combinations | the ridges, the condition number, and the eigenvalues of the correlation matrix of the estimates |
 | The doctor's findings | the findings above, other than the numerical ones |
-| Numerical checks | the tolerance and gradient checks, failed runs, starts redrawn |
+| Numerical checks | the tolerance and gradient checks, failed runs with their causes, starts redrawn |
 | Named predictions | each `result.predict(..., name=...)` |
 | TenQSP's reports | the model's `validate()`, `diagnostics()` of a run at the estimates with how well the ledger closed, and `explain()` with its list of numerical safeguards |
 
@@ -228,10 +233,13 @@ problem theoph_pop: method laplace (BFGS, FOCE-I), converged
 -2LL 353.9837 (132 measurements, 12 units)
 options: none written (rtol 1e-06 unless written)
 problem text (model and fit) SHA-256 722cbb35c100a7808acc33040fe26d8ef91eace6d5ee787667b7777ee36f38eb
+data file theoph.csv SHA-256 6536b3614f8d34de4de407a7f28b26657038e1e0239c704d7e42d04c9e1e19e0
+columns: ID=Subject, TIME=Time, DV=conc
+rows: 132; measurements 132, linked 132; doses 12
 data as read SHA-256 a1d839ceef82514b7de1befce5e24e811ebcc9b2868a5dd238b68e2431a608f9
 versions: tenqsp_fit 0.0.1, tenqsp 0.6.1, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1
-platform Linux x86_64; 41 s
-all units run as one build of the model (TenQSP pads the shorter ones exactly, with slots at t = +inf)
+platform Linux x86_64; 40 s
+all units run as one build of the model (TenQSP pads the shorter ones with slots at t = +inf; this changes the results by about the solver's tolerance)
 
 Each quantity
 -------------
@@ -255,7 +263,7 @@ note, optima: one start: other optima were not looked for. What to do: options s
 Numerical checks
 ----------------
 note, tolerance check: at rtol 1e-08 the -2LL changes by 2.2e-05 and the estimates by less than 0.001 SE; rtol 1e-06 is enough.
-failed runs during the fit: 0; starts redrawn: 0
+failed runs during the fit: 0 of 22 (0 %); starts redrawn: 0
 gradient check: not for laplace (its gradient is itself a difference)
 
 Named predictions

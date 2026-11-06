@@ -120,6 +120,24 @@ def test_failed_starts_are_drawn_again(tmp_path):
     assert len(r.starts) == 6 and np.isfinite(r.starts["-2LL"]).all()
 
 
+def test_failed_runs_are_counted_with_their_causes(tmp_path):
+    """ka = sqrt(q) started at q = 0: the steps try q < 0, where the model does not run. Each
+    is counted (the optimizer's own flag is the last accepted point's, which ran), with the
+    cause TenQSP gives, and above 1 % of the runs the doctor warns."""
+    p = problem(tmp_path, estimate="q = 1, CL = 0.05, ke = 0.1", extra="ka = sqrt(q)\n",
+                options="starts=1")  # fmt: skip
+    p._params[0].start = 0.0
+    r = tf.fit(p)
+    assert r.failed_runs > 0.01 * r.evaluations > 0
+    assert sum(r.failure_causes.values()) == min(r.failed_runs, O.FAILED_KEPT)
+    assert any("not finite" in c for c in r.failure_causes)
+    (f,) = [f for f in r.doctor().findings if f.check == "failed runs"]
+    assert f.severity == "warning" and f"{r.failed_runs} of {r.evaluations}" in f.message
+    assert "failed runs during the fit" in str(r.passport())
+    ok = tf.fit(problem(tmp_path, options="starts=1"))
+    assert ok.failed_runs == 0 and ok.evaluations > 0 and ok.failure_causes == {}
+
+
 def test_scales():
     inf = np.inf
     bounds = [(-inf, inf), (-inf, inf), (0, 1), (2, inf), (-inf, 1)]

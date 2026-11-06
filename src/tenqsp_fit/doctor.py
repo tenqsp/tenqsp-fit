@@ -7,7 +7,7 @@ Each finding has a ``check``, a ``severity`` ("problem": the results are wrong o
 meaningless as they stand; "warning": read them with care; "note": for the record), what was
 found with its numbers, and what to do.
 
-- **ridge** (F6.1, F7.4): the curvature of -2LL on the estimation scale (log for a positive
+- **ridge**: the curvature of -2LL on the estimation scale (log for a positive
   quantity; the Hessian the standard errors come from) has a direction weaker than
   ``RIDGE`` (1e-3) of its strongest, as a ratio of singular values (square roots of the
   eigenvalues): along it the fit does not change. Named by the quantities whose loading is at
@@ -15,19 +15,20 @@ found with its numbers, and what to do.
 - **weakly determined**: a 95 % interval spanning more than a factor 10 (a quantity on the
   log scale), covering more than half of its range (within bounds, e.g. a correlation), or
   an RSE above 50 % (others); partners with a correlation above 0.9 named.
-- **several optima** (F6.2): starts ending more than 0.1 apart in -2LL.
-- **at a bound, a spread near 0** (F6.3); **shrinkage** above 30 % (F6.5).
-- **tolerance check** (F6.9): -2LL again at rtol / 100 (and atol / 100 when set): a problem
+- **several optima**: starts ending more than 0.1 apart in -2LL.
+- **at a bound, a spread near 0**; **shrinkage** above 30 %.
+- **tolerance check**: -2LL again at rtol / 100 (and atol / 100 when set): a problem
   if it changes by more than 0.1, or if the change of its gradient would move the estimates
   by more than 0.1 SE (one Newton step). NUTS: minus the log posterior at 20 draws.
-- **gradient check** (F6.10a): the exact directional derivative against central differences
+- **gradient check**: the exact directional derivative against central differences
   at rtol / 100, along 3 random directions, at 3 points drawn from the estimates' normal
   approximation where -2LL is within the 99 % chi-square bound of the best (NUTS: at 3
   draws); a warning above 1 %. Not for ``laplace``, whose gradient is itself a difference.
-- **jumps in the model** (F6.10b): extinction groups, lag times, and the jumps TenQSP's
+- **jumps in the model**: extinction groups, lag times, and the jumps TenQSP's
   ``validate`` notes (``floor``, ``ceil``, ``rem``, conditions switching cell by cell).
-- **failed runs** (F4.10); for NUTS, the convergence checks (F4.6) and how much the data
-  narrowed each prior (posterior SD over prior SD, on the estimation scale).
+- **failed runs**: counted with their causes; a warning above 1 % of the fit's runs.
+- for NUTS, the convergence checks and how much the data narrowed each prior (posterior SD
+  over prior SD, on the estimation scale).
 
 The tolerance and gradient checks solve the model again (theophylline: about 8 s; an
 infection-age model: about 100 s); ``options checks=quick`` leaves them out.
@@ -54,6 +55,7 @@ PARTNER = 0.9  # |correlation| that names a partner
 OPTIMA_GAP = 0.1  # -2LL apart: different optima
 SPREAD_ZERO = 0.01  # a spread (sd, sdlog, cv, sdlogit) below this; a var below its square
 SHRINKAGE = 0.30
+FAILED_SHARE = 0.01  # failed runs above this share of the fit's runs: a warning
 TIGHTEN = 100.0  # the tolerance and gradient checks run at rtol / TIGHTEN
 TOL_M2LL = 0.1  # tolerance check: largest change of -2LL
 TOL_SHIFT = 0.1  # tolerance check: largest move of an estimate, in SEs
@@ -415,12 +417,38 @@ def _shrinkage(result) -> list[Finding]:
     )]  # fmt: skip
 
 
+def failed_text(result) -> str:
+    """The line "failed runs during the fit: n of m (p %); causes ...", as the passport has it."""
+    n = int(getattr(result, "failed_runs", 0) or 0)
+    m = int(getattr(result, "evaluations", 0) or 0)
+    text = f"failed runs during the fit: {n}"
+    if m:
+        text += f" of {m} ({100 * n / m:.3g} %)"
+    causes = getattr(result, "failure_causes", {}) or {}
+    if causes:
+        seen = sum(causes.values())
+        of = f" (the first {seen})" if seen < n else ""
+        text += f"; causes{of}: " + "; ".join(f"{k} ({v})" for k, v in causes.items())
+    return text
+
+
 def _failed(result) -> list[Finding]:
     n = int(getattr(result, "failed_runs", 0) or 0)
     if not n:
         return []
-    return [Finding("failed runs", "note", f"{n} run(s) of the model failed during the fit "
-                    "(refused steps); the fit went around them.")]  # fmt: skip
+    m = int(getattr(result, "evaluations", 0) or 0)
+    if m and n > FAILED_SHARE * m:
+        return [Finding(
+            "failed runs", "warning",
+            f"{failed_text(result)}: more than {100 * FAILED_SHARE:.0f} % of the fit's runs "
+            "failed, so the fit spent much of its work outside the region where the model "
+            "runs, and may have stopped at the edge of it.",
+            "check the start values and bounds; obj.status(x) at the estimates says why a run "
+            "fails; a tighter rtol or bounds that keep the parameters where the model runs "
+            "may help.",
+        )]  # fmt: skip
+    return [Finding("failed runs", "note", f"{failed_text(result)}; the fit went around "
+                    "them (refused steps).")]  # fmt: skip
 
 
 def _jumps(result) -> list[Finding]:

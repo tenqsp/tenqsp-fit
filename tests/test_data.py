@@ -265,6 +265,11 @@ def test_provenance_records_the_file_hash_and_filters(tmp_path):
         "neither": 0,
     }
     assert prov["units"] == {"column": "ID", "in the data": 3, "with measurements": 2}
+    from tenqsp_fit.passport import _data_lines  # as the passport says it
+
+    lines = _data_lines(prov)
+    assert lines[0].startswith("data file ") and lines[0].endswith(prov["data"]["sha256"])
+    assert "left out: 4 row(s) by ignore DV where DVID == 2" in lines
     assert prov["model"]["hash"] == tq.Model.from_text(PK).to_ir().content_hash()
     # a table given in Python is hashed by its contents
     a, b = problem(nonmem()), problem(nonmem())

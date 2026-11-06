@@ -228,6 +228,50 @@ def plot_individual(result, units=None, *, ncols: int = 4, points: int = 200):
     return fig
 
 
+def plot_data(problem, *, log: bool = False, ncols: int = 3):
+    """The data as the fit reads them, before fitting: one panel per link, each unit's
+    measurements joined by a line, censored ones as red crosses at their limit, and the dose
+    times as ticks along the bottom. ``log``: a log y axis."""
+    from . import units as U
+
+    plt = _pyplot()
+    units = problem.units()
+    links = list(dict.fromkeys(lhs for u in units for lhs in u.observations))
+    if not links:
+        raise ValueError(f"{problem.name}: no measurement is linked to the model, so there is "
+                         "nothing to plot (observe <observable> = DV).")  # fmt: skip
+    ncols = min(ncols, len(links))
+    nrows = math.ceil(len(links) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 2.9 * nrows), squeeze=False)
+    axes = axes.ravel()
+    for ax in axes[len(links) :]:
+        ax.set_visible(False)
+    doses = sorted({float(e["start"] if e["kind"] == "infusion" else e["time"])
+                    for u in units for e in U.events(u.scenario)})  # fmt: skip
+    for ax, lhs in zip(axes, links, strict=False):
+        n = 0
+        for u in units:
+            o = u.observations.get(lhs)
+            if o is None:
+                continue
+            n += 1
+            cens = np.zeros(len(o.times), bool) if o.censored is None else o.censored
+            ax.plot(o.times[~cens], o.values[~cens], "o-", ms=3, lw=0.7, alpha=0.7)
+            if cens.any():
+                ax.plot(o.times[cens], o.below[cens], "x", ms=4, color="#d62728")
+        if doses:
+            ax.plot(doses, np.zeros(len(doses)), "|", ms=8, color="0.3",
+                    transform=ax.get_xaxis_transform(), clip_on=False)  # fmt: skip
+        if log:
+            ax.set_yscale("log")
+        ax.set_title(f"{lhs} ({n} unit{'s' if n != 1 else ''})", fontsize=9)
+        ax.set_xlabel("time", fontsize=8)
+        ax.tick_params(labelsize=7)
+    fig.suptitle(f"{problem.name}: the data as the fit reads them", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
 def plot_diagnostics(result):
     """Goodness of fit, the VPC and the path of the fit, one above the other in one figure."""
     plt = _pyplot()
@@ -875,6 +919,7 @@ def run_record(result, text: str | None = None, data_bytes: bytes | None = None)
         "versions": versions,
         "platform": f"{platform.system()} {platform.machine()}",
         "argv": sys.argv[:1],
+        "provenance": p.provenance() if p._data is not None else None,
     }
 
 

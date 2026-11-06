@@ -199,6 +199,12 @@ an additive error on log10 counts (about a constant CV on the counts). In the pr
 combined and power models, `f` is kept above 0 by a smooth floor at the solver's absolute
 tolerance, so the SD cannot reach 0 (the summary lists it under `near zero`).
 
+**A log-normal (exponential) error** has no name of its own: it is an additive error on the
+log scale. Put the logarithm of the measurements in a column of the data and link it on that
+scale, `observe log(conc) = LNDV` with `error log(conc) ~ additive(0.2)`: the measurement is
+then lognormal around the prediction, with sdlog 0.2 (NONMEM's `Y = LOG(F) + EPS(1)` with
+log-transformed data).
+
 ### A likelihood written out
 
 For a residual distribution that is not one of these, the log-density of one measurement can

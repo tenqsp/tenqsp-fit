@@ -385,11 +385,22 @@ def _result(problem, post, start, arr, chains, warmup, samples, status, notes, s
 
 class PosteriorResult(Result):
     """A NUTS fit: ``result.table()`` (posterior median, mean, SD, 95 % interval, R-hat,
-    effective sample sizes), ``result.draws`` (every draw after warmup), ``result.convergence()``
-    (per chain), ``result.plot_trace()`` (each chain's path); ``individual()``, ``plot_gof()``,
+    effective sample sizes), ``result.draws`` (every draw after warmup), ``result.corr``
+    (correlations over the draws), ``result.convergence()`` (per chain), ``result.plot_trace()``
+    (each chain's path); ``individual()``, ``plot_gof()``,
     ``plot_individual()`` and ``tables()`` at the posterior medians; ``vpc()`` with each
     simulated study from a different draw. ``result.x`` and ``result.estimates`` are the
     posterior medians."""
+
+    @property
+    def corr(self) -> pd.DataFrame:
+        """Correlations of the quantities over the posterior draws."""
+        from .optimize import _corr_frame
+
+        k = self.draws[list(self.names)].to_numpy()
+        n = len(self.names)
+        cov = np.cov(k, rowvar=False).reshape(n, n) if len(k) > 1 else np.full((n, n), np.nan)
+        return _corr_frame(cov, self.names)
 
     def table(self) -> pd.DataFrame:
         k = self.draws[list(self.names)].to_numpy()

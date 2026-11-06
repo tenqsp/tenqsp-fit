@@ -272,6 +272,7 @@ def test_the_nuts_result(sampled, tmp_path):
                                r.draws[["ka", "CL", "ke"]].median().to_numpy())  # fmt: skip
     conv = r.convergence()
     assert list(conv.chain) == [1, 2, 3, 4] and (conv.draws == 250).all()
+    np.testing.assert_allclose(r.corr.to_numpy(), r.draws[["ka", "CL", "ke"]].corr().to_numpy())
     text = repr(r)
     assert "4 chains x 250 draws (after 200 warmup)" in text and "prior" in text
     fig = r.plot_trace()

@@ -226,3 +226,16 @@ def test_plots_have_their_panels(pooled, population):
     assert len(fig.axes[0].lines) == 3  # own curve, typical curve, data
     with pytest.raises(ValueError, match="no unit 99"):
         population.plot_individual(units=[99])
+
+
+def test_plot_data_before_fitting(tmp_path):
+    """One panel per link, a line per unit, the dose times as ticks; nothing is fitted."""
+    import matplotlib.pyplot as plt
+
+    p = problem(tmp_path)
+    fig = p.plot_data(log=True)
+    (ax,) = [a for a in fig.axes if a.get_visible()]
+    assert ax.get_title() == "conc (3 units)" and ax.get_yscale() == "log"
+    assert len(ax.lines) == 3 + 1  # three units, the dose ticks
+    np.testing.assert_allclose(ax.lines[0].get_ydata(), table().query("ID == 1").DV)
+    plt.close(fig)

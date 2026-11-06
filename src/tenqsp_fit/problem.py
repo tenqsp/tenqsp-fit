@@ -1081,6 +1081,14 @@ class Problem:
             df = df.drop(columns="RATE")
         return df
 
+    def plot_data(self, *, log: bool = False, ncols: int = 3):
+        """The data as the fit reads them, before fitting: one panel per link, a line per
+        unit, censored measurements as red crosses at their limit, dose times as ticks.
+        ``log=True``: a log y axis. Returns the figure."""
+        from .results import plot_data
+
+        return plot_data(self, log=log, ncols=ncols)
+
     def provenance(self) -> dict:
         """Where the data came from and what the fit reads of them, as recorded with every
         fit: the file and its SHA-256, the column map, the rows read, measured, dosed and
@@ -1452,19 +1460,25 @@ class Problem:
             elif default is not None:
                 opts.append(f"{k} {_opt(default)} (default)")
         row("options", ", ".join(opts))
+        near_zero = self._near_zero()
+        if near_zero:
+            row("near zero", near_zero)
+        return _Text("\n".join(out))
+
+    def _near_zero(self) -> str | None:
+        """What a smooth floor keeps above 0 (predictions on a log scale, the f of an error
+        model other than additive), as the summary and the passport say it; None if
+        nothing."""
         floored = [x.lhs for x in self._links if isinstance(x, _Observe)
                    and _key(x.lhs) not in set(self._m.observables)]  # fmt: skip
         floored += [
             f"f in {e.lhs} ~ {e.model.name}" for e in self._errors if e.model.name != "additive"
         ]
-        if floored:
-            atol = self._options.get("atol") or 1e-6
-            row(
-                "near zero",
-                f"kept above 0 by a smooth floor at {_num(float(atol))} (the solver's atol): "
-                + ", ".join(floored),
-            )
-        return _Text("\n".join(out))
+        if not floored:
+            return None
+        atol = self._options.get("atol") or 1e-6
+        return (f"kept above 0 by a smooth floor at {_num(float(atol))} (the solver's atol): "
+                + ", ".join(floored))  # fmt: skip
 
     def _feeds_fit_formula(self, name: str) -> bool:
         texts = [d.formula for d in self._defines] + [

@@ -64,7 +64,11 @@ downhill, and step halving. Each evaluation starts from the modes found last.
 **Outer fit.** BFGS ([SciPy](https://scipy.org)) on the estimation scales of
 [`optimize`](optimize.md) (log, logit within bounds; a correlation within (−1, 1)), as NONMEM
 minimizes its FOCE objective. Its gradient includes how the modes move with the parameters
-(the implicit function theorem), so the fit reaches the minimum of the Laplace −2LL. The fit
+(the implicit function theorem), so the fit reaches the minimum of the Laplace −2LL. The
+terms of this gradient are central differences (step 10⁻⁴ on the estimation scale) of the
+objective and of its exact derivative by the scores, at fixed modes: not exact, but close
+enough for the fit to reach the minimum (theophylline: −2LL 353.98, against 354.04 with the
+first-order "FOCE gradient", which holds the solver's sensitivities fixed). The fit
 ends when the largest derivative of −2LL on the estimation scale is below 10⁻³.
 
 **Starts** as in [`optimize`](optimize.md): `options starts=4` draws three more around the

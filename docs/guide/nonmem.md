@@ -95,9 +95,15 @@ near zero  kept above 0 by a smooth floor at 1e-6 (the solver's atol): f in conc
 | `FIX` | `fix(0.3)` inside a distribution or error model, or `fix V = 32` |
 | `$SIGMA`, `EPS` | `error conc ~ additive(a)`, `proportional(b)`, `combined(a, b)`, `power(b, k)`: the SD itself, not a variance |
 | BLQ, M3 | `censor conc below 0.05`; with a flag and a limit column, `censor conc where BLQ == 1 below LLOQ` |
+| BLQ, M1 (rows dropped) | `ignore DV where BLQ == 1`; the passport lists the rows left out |
+| an exponential error on log-transformed data (`Y = LOG(F) + EPS(1)`) | a column of the logs, `observe log(conc) = LNDV`, and `error log(conc) ~ additive(sd)` |
 | `$EST METHOD=COND INTER` | `method laplace` |
 | `$EST METHOD=NUTS` (or `BAYES`) | `method nuts` |
 | `$COV` | always run: standard errors with every fit (see below) |
+| `$COV PRINT=E`, the correlation matrix | `result.corr`; its eigenvalues are in the passport |
+| a covariance step that fails, or a skewed interval | `result.profile("CL")`: a profile likelihood interval ([results](results.md#profile-likelihood)) |
+| CWRES, NPDE | not yet: IWRES in `sdtab` and the goodness-of-fit plots, and the VPC |
+| `$EST METHOD=0` (FO), `SAEM`, `IMP` | not yet: `method laplace` (FOCE-I) or `method nuts` |
 | `$SIM`, a VPC by PsN | `result.vpc()`, `result.predict(regimen=...)` |
 | `$TABLE` (sdtab, patab) | `result.tables()`: `sdtab` and `patab` ([results](results.md)) |
 | EBEs, `ETA` in tables | `result.individual()`: each unit's scores `z(CL)` (= ETA / its SD) and values |

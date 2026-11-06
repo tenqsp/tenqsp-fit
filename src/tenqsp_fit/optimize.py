@@ -53,6 +53,7 @@ __all__ = ["Result"]
 
 BAD = 1e3  # each residual of a failed run (a rejected step), least squares
 BAD_VALUE = 1e12  # -2LL of a failed run, BFGS
+FAILED_KEPT = 50  # failed runs whose cause is asked of TenQSP after the fit
 SPREAD_LOG = math.log(5) / 2  # starts on the log scale: 95 % within a factor 5
 MAX_REDRAWS = 20
 DEFAULT_MAXITER = 200
@@ -267,16 +268,23 @@ def covariance(value, u, sc, *, gradient=None) -> dict:
 
 
 # ----------------------------------------------------------------------------- result
+def _corr_frame(cov: np.ndarray, names) -> pd.DataFrame:
+    sd = np.sqrt(np.diag(cov))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        c = cov / np.outer(sd, sd)
+    return pd.DataFrame(c, index=list(names), columns=list(names))
+
+
 class Result:
-    """A fit: ``result.estimates`` ({name: value}), ``result.m2ll`` (-2 log-likelihood at
-    them), ``result.status`` ("converged", "max iterations", "stopped" or "failed"),
-    ``result.table()`` (estimates, standard errors, RSE %, 95 % intervals), ``result.se``,
-    ``result.cov`` (covariance of the estimates), ``result.starts`` (each start's values,
-    its end, -2LL, steps, status), ``result.trace`` (every step of every start),
-    ``result.plot_trace()``, ``result.plot_waterfall()``; ``result.tables()`` (NONMEM's
-    sdtab and patab), ``result.plot_gof()``, ``result.plot_individual()``, ``result.vpc()``,
-    ``result.profile(name)``, ``result.save(folder)``. With parameters that vary between
-    units (method laplace), also ``result.individual()`` (each unit's scores and values) and
+    """A fit: ``result.estimates`` ({name: value}), ``result.m2ll`` (-2 log-likelihood at them),
+    ``result.status`` ("converged", "max iterations", "stopped" or "failed"), ``result.table()``
+    (estimates, standard errors, RSE %, 95 % intervals), ``result.se``, ``result.cov``
+    (covariance of the estimates), ``result.corr`` (their correlations), ``result.starts`` (each
+    start's values, its end, -2LL, steps, status), ``result.trace`` (every step of every start),
+    ``result.plot_trace()``, ``result.plot_waterfall()``; ``result.tables()`` (NONMEM's sdtab
+    and patab), ``result.plot_gof()``, ``result.plot_individual()``, ``result.vpc()``,
+    ``result.profile(name)``, ``result.save(folder)``. With parameters that vary between units
+    (method laplace), also ``result.individual()`` (each unit's scores and values) and
     ``result.shrinkage``. ``print`` shows the table."""
 
     def __init__(self, **kw):
@@ -285,6 +293,14 @@ class Result:
     @property
     def estimates(self) -> dict[str, float]:
         return dict(zip(self.names, map(float, self.x), strict=True))
+
+    @property
+    def corr(self) -> pd.DataFrame:
+        """Correlations of the estimates, one row and one column per quantity (from
+        ``result.cov``; NaN where the standard errors failed)."""
+        return _corr_frame(
+            np.asarray(getattr(self, "cov", np.full((len(self.names),) * 2, np.nan))), self.names
+        )
 
     def plot_trace(self):
         """The path of the fit, as the live plot showed it: -2LL against the step and one
@@ -613,11 +629,15 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
 
     @jax.jit
     def step(u, st):
+        # the step's aux is the last accepted point's, so whether the point tried ran is
+        # read here: a rejected step is checked by ``runs`` at the point it tried
         state = eqx.combine(st, static)
-        u2, state2, ok = solver.step(fn, u, None, {}, state, tags)
+        tried = state.y_eval
+        u2, state2, _ = solver.step(fn, u, None, {}, state, tags)
         done = solver.terminate(fn, u2, None, {}, state2, tags)[0]
         f = 2.0 * state2.f_info.as_min() if least_squares else state2.f_info.f
-        return u2, arrays(state2), done, ok, f
+        rejected = state2.num_accepted_steps == state.num_accepted_steps
+        return u2, arrays(state2), done, rejected, tried, f
 
     workers = ThreadPoolExecutor(max_workers=max(1, min(n_starts, os.cpu_count() or 1)))
     U_start, redrawn = draw_starts(problem, runs, x0, sc, rng, n_starts, workers)
@@ -631,7 +651,7 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
 
     total_jit = jax.jit(total)
     run = run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
-                     "optimize", const, problem.name, total_jit,
+                     "optimize", const, problem.name, total_jit, runs=runs,
                      timeout=seconds(opts.get("timeout")), t_start=t_start)  # fmt: skip
     final = np.array([float(v) for v in ThreadPoolExecutor(len(U_start)).map(obj, list(run.X))])
     rank = final if penalty is None else np.array([float(total_jit(jnp.asarray(x)))
@@ -682,12 +702,13 @@ class _Run:
 
 
 def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers, label,
-               const=0.0, problem_name="", value=None, timeout=None,
+               const=0.0, problem_name="", value=None, runs=None, timeout=None,
                t_start=None) -> _Run:  # fmt: skip
     """Every start in its own thread (JAX runs them on separate cores), with the live text
-    and Ctrl-C keeping the work. ``step(u, state) -> (u, state, done, ok, f)``; ``value(x)``,
-    -2LL at a start, gives the trace its step 0. ``timeout``: seconds from ``t_start`` (the
-    fit's start) after which the starts stop as for Ctrl-C."""
+    and Ctrl-C keeping the work. ``step(u, state) -> (u, state, done, rejected, tried, f)``;
+    ``runs(u)``: whether the model runs at ``u``, asked of each rejected step's point;
+    ``value(x)``, -2LL at a start, gives the trace its step 0. ``timeout``: seconds from
+    ``t_start`` (the fit's start) after which the starts stop as for Ctrl-C."""
     t_start = time.perf_counter() if t_start is None else t_start
     n = len(U_start)
     m2ll = np.full(n, np.nan)
@@ -696,6 +717,7 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
     done = np.zeros(n, bool)
     trace: list[tuple] = []
     failed = np.zeros(n, int)
+    failed_at: list[np.ndarray] = []  # the points of failed runs (the first FAILED_KEPT)
     stop = threading.Event()
     lock = threading.Lock()  # a step's -2LL and values are shown together
 
@@ -710,8 +732,11 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
         for it in range(1, maxiter + 1):
             if stop.is_set():
                 return
-            u, state, d, okj, f = step(u, state)
-            failed[j] += int(not bool(okj))
+            u, state, d, rejected, tried, f = step(u, state)
+            if runs is not None and bool(rejected) and not bool(runs(tried)):
+                failed[j] += 1
+                if len(failed_at) < FAILED_KEPT:
+                    failed_at.append(np.asarray(to_x(tried, sc)))
             fj, xj = float(f) + const, np.asarray(to_x(u, sc))
             with lock:
                 steps[j], m2ll[j], X[j] = it, fj, xj
@@ -726,7 +751,8 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
     status, stopped_by = watch(futures, stop, timeout, t_start, show)
     workers.shutdown()
     show(last=True, status=status)
-    return _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status,
+    return _Run(X=X, steps=steps, done=done, failed=failed, failed_at=failed_at,
+                evaluations=steps.copy(), trace=trace, status=status,
                 stopped_by=stopped_by)  # fmt: skip
 
 
@@ -811,6 +837,8 @@ def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, 
         scales=sc,
         redrawn=redrawn,
         failed_runs=int(run.failed.sum()),
+        evaluations=int(np.sum(run.evaluations)),
+        failure_causes=failure_causes(obj, run.failed_at),
         n_observations=obj.n_observations,
         n_censored=obj.n_censored,
         seconds=time.perf_counter() - t_start,
@@ -820,6 +848,22 @@ def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, 
     )
     warn_near_bounds(result)
     return result
+
+
+def failure_causes(obj, points) -> dict[str, int]:
+    """Why the kept runs failed, asked of TenQSP at each one's point: ``{cause: count}``. A
+    point where every unit's run ends but a value is not finite counts as "values not
+    finite"."""
+    out: dict[str, int] = {}
+    for x in points:
+        try:
+            st = obj.status(x)
+        except Exception:  # noqa: BLE001 - the cause is reported, not needed
+            st = {}
+        bad = [v for v in st.values() if v != "ok"]
+        cause = bad[0] if bad else "values not finite"
+        out[cause] = out.get(cause, 0) + 1
+    return out
 
 
 def _x_of(U, sc):

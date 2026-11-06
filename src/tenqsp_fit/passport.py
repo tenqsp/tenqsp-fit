@@ -6,12 +6,12 @@ what they do not, with every default, the checks and how the run can be repeated
 ``.to_dict()`` as plain data (JSON); ``result.save(folder)`` writes ``passport.md`` and
 ``passport.json``.
 
-Sections, in order: (1) the run (F11.1, F4.7); (2) each quantity: estimate, uncertainty, how
+Sections, in order: (1) the run; (2) each quantity: estimate, uncertainty, how
 well it is determined, its profile's shape when one was computed, its prior and, for NUTS,
-how much the data narrowed it (F11.3); (3) ridges and the condition number (F11.4); (4) the
-doctor's findings (F11.5); (5) the numerical checks (F11.6, F11.11); (6) named predictions
-(F11.7); (7) TenQSP's own reports: ``validate()``, ``diagnostics()`` at the estimate with how
-well the ledger closed, and ``explain()`` with its numerical safeguards (F11.10).
+how much the data narrowed it; (3) ridges and the condition number; (4) the
+doctor's findings; (5) the numerical checks; (6) named predictions
+(7) TenQSP's own reports: ``validate()``, ``diagnostics()`` at the estimate with how
+well the ledger closed, and ``explain()`` with its numerical safeguards.
 """
 
 from __future__ import annotations
@@ -26,6 +26,21 @@ __all__ = ["Passport", "passport"]
 
 _NUMERICAL = ("tolerance check", "gradient check", "failed runs", "jumps in the model",
               "convergence", "tolerance and gradient checks")  # fmt: skip
+
+
+def _data_lines(prov) -> list[str]:
+    """The data file, its column map and the rows left out, from ``problem.provenance()``."""
+    if not prov:
+        return []
+    d, rows = prov["data"], prov["rows"]
+    out = [f"data file {d['as written']} SHA-256 {d['sha256']}"]
+    if d["column map"]:
+        out.append("columns: " + ", ".join(f"{k}={v}" for k, v in d["column map"].items()))
+    out.append(f"rows: {d['rows']}; measurements {rows['measurements']}, linked "
+               f"{rows['linked']}; doses {rows['doses']}")  # fmt: skip
+    for r in rows["left out"]:
+        out.append(f"left out: {r['rows']} row(s) by {r['rule']}")
+    return out
 
 
 class Passport:
@@ -112,12 +127,16 @@ def passport(result) -> Passport:
         + ")",
         f"options: {opts or 'none written'} (rtol {p._options.get('rtol', 1e-6):g} unless written)",
         f"problem text (model and fit) SHA-256 {run['hashes']['problem.tq']}",
+        *_data_lines(run.get("provenance")),
         f"data as read SHA-256 {run['hashes']['data.csv']}",
         "versions: " + ", ".join(f"{k} {v}" for k, v in run["versions"].items()),
         f"platform {run['platform']}; {run['seconds']:.0f} s",
-        "all units run as one build of the model (TenQSP pads the shorter ones exactly, with "
-        "slots at t = +inf)",
+        "all units run as one build of the model (TenQSP pads the shorter ones with slots at "
+        "t = +inf; this changes the results by about the solver's tolerance)",
     ]
+    near_zero = p._near_zero()
+    if near_zero:
+        lines.append(f"near zero: {near_zero}")
     if getattr(result, "with_priors", None) is not None:
         lines.append("written priors used: the estimates are the posterior mode")
     sections.append(("The run", lines))
@@ -133,6 +152,13 @@ def passport(result) -> Passport:
     lines = [f.message for f in ridge] or ["no ridge: no direction weaker than 1e-3 of the "
                                            "strongest"]  # fmt: skip
     lines += [f.message for f in det]
+    corr = result.corr.to_numpy()
+    if result.method != "nuts" and np.all(np.isfinite(corr)):  # NONMEM's $COV PRINT=E
+        eig = np.linalg.eigvalsh(corr)
+        ratio = f" (largest over smallest {eig[-1] / eig[0]:.3g})" if eig[0] > 0 else ""
+        lines.append("eigenvalues of the correlation matrix of the estimates: "
+                     + ", ".join(f"{v:.3g}" for v in eig) + ratio)  # fmt: skip
+        data["correlation eigenvalues"] = [float(v) for v in eig]
     if result.method == "nuts":
         lines = ["for NUTS, ridges show as quantities the data say little about (below and "
                  "in the findings); the priors bound them."]  # fmt: skip
@@ -148,8 +174,13 @@ def passport(result) -> Passport:
     num = [f for f in doctor.findings if f.check in _NUMERICAL]
     lines = _finding_lines(num)
     if result.method != "nuts":
-        lines.append(f"failed runs during the fit: {int(getattr(result, 'failed_runs', 0))}; "
-                     f"starts redrawn: {int(getattr(result, 'redrawn', 0))}")  # fmt: skip
+        from .doctor import failed_text
+
+        lines.append(f"{failed_text(result)}; starts redrawn: "
+                     f"{int(getattr(result, 'redrawn', 0))}")  # fmt: skip
+        data["failed_runs"] = {"count": int(getattr(result, "failed_runs", 0)),
+                               "evaluations": int(getattr(result, "evaluations", 0)),
+                               "causes": dict(getattr(result, "failure_causes", {}))}  # fmt: skip
     if result.method == "laplace":
         lines.append("gradient check: not for laplace (its gradient is itself a difference)")
     sections.append(("Numerical checks", lines))

@@ -167,6 +167,16 @@ def test_passport(pk_fit, tmp_path):
     json.dumps(d, default=str)  # plain data
     assert d["tenqsp"]["ledger closure"] < 1e-8
     assert d["run"]["hashes"]["problem.tq"] and d["run"]["versions"]["tenqsp"]
+    prov = d["run"]["provenance"]  # the data file's own hash, as problem.provenance() gives it
+    assert prov == pk_fit.problem.provenance() and len(prov["data"]["sha256"]) == 64
+    assert f"SHA-256 {prov['data']['sha256']}" in repr(pp)
+    c = pk_fit.corr  # the correlations of the estimates, and NONMEM's eigenvalues of them
+    assert list(c.index) == list(c.columns) == list(pk_fit.names)
+    np.testing.assert_allclose(c.to_numpy(), pk_fit.cov / np.outer(pk_fit.se, pk_fit.se))
+    np.testing.assert_allclose(np.diag(c), 1.0)
+    np.testing.assert_allclose(d["correlation eigenvalues"], np.linalg.eigvalsh(c))
+    assert "eigenvalues of the correlation matrix" in repr(pp)
+    assert d["failed_runs"] == {"count": 0, "evaluations": pk_fit.evaluations, "causes": {}}
     text = repr(pp)
     assert "validate(): 2 issue(s)" in text and "no initial condition given" in text
     assert "Numerical safeguards" in text

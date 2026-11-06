@@ -269,4 +269,12 @@ print(u.covariates)
   censored link, `LLOQ`. `p.table().to_csv("data.csv", index=False, na_rep=".")` writes it.
 - `p.provenance()`: the file's path and SHA-256, the column map, how many rows were measured,
   linked, dosed and left out, and the versions. It is recorded with every fit, in the
-  [passport](doctor.md).
+  [passport](doctor.md) and in `run.json` when the result is saved.
+- `p.plot_data()`: the data, before any fit: one panel per link, a line per unit, censored
+  measurements as red crosses at their limit, the dose times as ticks along the bottom;
+  `p.plot_data(log=True)` with a log axis.
+
+Rows left out by `ignore` are listed in the passport with the rule that left them out. To
+leave out measurements below the limit of quantification (Beal's M1 method) write the rule:
+`ignore DV where BLQ == 1`; the passport then shows how many were dropped. M3 (`censor`) uses
+them instead and is usually the better choice.

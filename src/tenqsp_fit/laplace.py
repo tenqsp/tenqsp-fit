@@ -30,12 +30,12 @@ Hessian is not positive definite or its step is much longer; with step halving.
 
 **The outer fit.** BFGS (SciPy) on the estimation scales of ``method optimize`` (log, logit
 within bounds; a correlation within (-1, 1)), as NONMEM minimizes the FOCE objective itself.
-The gradient is exact up to central differences, by the implicit function theorem:
-``dO/du = dF/du + dF/dz dz^/du`` with ``dz^/du = -(d2g/dz2)^-1 d2g/dz du``, every term a
-difference of first derivatives at the fixed modes (no inner fit; 2p + 2q evaluations in one
-batched call). TenQSP has no second derivatives of the solution yet; the first-order
-"FOCE gradient" that holds the solver's sensitivities fixed stops short of the minimum
-(theophylline: at -2LL 354.04, the Lindstrom-Bates point of nlme, against 353.98).
+The gradient follows the implicit function theorem:
+``dO/du = dF/du + dF/dz dz^/du`` with ``dz^/du = -(d2g/dz2)^-1 d2g/dz du``, each term a
+central difference, at the fixed modes, of the objective or of its exact derivative by the
+scores (no inner fit; 2p + 2q evaluations in one batched call); it is not exact. The
+first-order "FOCE gradient" that holds the solver's sensitivities fixed stops short of the
+minimum (theophylline: at -2LL 354.04, the Lindstrom-Bates point of nlme, against 353.98).
 
 **Standard errors** from the Hessian of -2LL by central differences of that gradient
 (NONMEM's covariance step, R matrix): covariance = 2 H^-1 on the estimation scale, carried to
@@ -62,6 +62,7 @@ from .live import default_progress
 from .optimize import (
     BAD_VALUE,
     DEFAULT_MAXITER,
+    FAILED_KEPT,
     NOT_ASKED,
     _Progress,
     _Run,
@@ -94,9 +95,8 @@ class Laplace:
     approximation (FOCE-I): ``obj = tf.objective(problem)``, ``obj(x)`` with ``x`` in
     ``obj.names`` order (``obj.x0``: the starts). ``obj.modes(x)``: the units' conditional
     modes (normal scores, one column per varying parameter); ``obj.individual(x)``: each
-    unit's parameter values. Its derivatives need second derivatives of the solution, which
-    TenQSP does not give: ``jax.grad`` of it is not the gradient (the fit uses the implicit
-    function theorem, see the module notes)."""
+    unit's parameter values. The fit's gradient comes from the implicit function theorem (see
+    the module notes), not from ``jax.grad`` of this function."""
 
     def __init__(self, problem):
         cond = Objective(problem, _population=True)
@@ -371,6 +371,8 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     steps = np.zeros(n, int)
     done = np.zeros(n, bool)
     failed = np.zeros(n, int)
+    evaluations = np.zeros(n, int)
+    failed_at: list[np.ndarray] = []
     messages = [""] * n
     trace: list[tuple] = []
     stop = threading.Event()
@@ -383,8 +385,11 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
             if stop.is_set():
                 raise _Stopped
             v, Zh = value(u, warm["Z"])
+            evaluations[j] += 1
             if not np.isfinite(v):
                 failed[j] += 1
+                if len(failed_at) < FAILED_KEPT:
+                    failed_at.append(np.asarray(to_x(jnp.asarray(u), sc)))
                 return BAD_VALUE, np.zeros(p)
             warm["Z"] = Zh
             if "first" not in warm:  # scipy starts at the start: the trace's step 0
@@ -393,6 +398,8 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
             g = np.asarray(gradient(jnp.asarray(u), jnp.asarray(Zh)))
             if not np.all(np.isfinite(g)):
                 failed[j] += 1
+                if len(failed_at) < FAILED_KEPT:
+                    failed_at.append(np.asarray(to_x(jnp.asarray(u), sc)))
                 return BAD_VALUE, np.zeros(p)
             return v, g
 
@@ -427,7 +434,8 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
 
     final = np.array([float(v) for v in pool.map(obj, list(X))])
     rank = final + np.array([float(pen(jnp.asarray(to_u(x, sc)))) for x in X])
-    run_ = _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status,
+    run_ = _Run(X=X, steps=steps, done=done, failed=failed, failed_at=failed_at,
+                evaluations=evaluations, trace=trace, status=status,
                 stopped_by=stopped_by)  # fmt: skip
     best = int(np.argmin(np.where(np.isfinite(rank), rank, np.inf)))
     Z = obj.modes(X[best])

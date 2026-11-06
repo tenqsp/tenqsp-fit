@@ -134,7 +134,12 @@ posterior itself gives each quantity's interval.
 
 - Slower than [`optimize`](optimize.md) and [`laplace`](laplace.md): each draw runs the model
   several times (the mean steps per draw), and a population adds every unit's scores to what
-  is sampled.
+  is sampled. One subject of the theophylline data (2 chains of 300 warmup and 250 draws)
+  takes about a minute; the whole theophylline population (12 subjects, the defaults: 4
+  chains of 1000 warmup and 1000 draws) about 45 minutes, against under a minute for
+  `laplace`. A model of a structured population (a PDE) costs more
+  per run and can take hours: try `optimize` or `laplace` first, and `nuts` when their
+  answer is not enough.
 - The mass matrix is fixed from the curvature at the starting point; a posterior whose shape
   changes much across its range (a funnel, a banana) can still give divergences, and the
   doctor reports them.

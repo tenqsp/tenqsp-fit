@@ -85,6 +85,7 @@ RSE and interval columns are empty. A `note:` line under the table reports a sta
 | `result.estimates` | `{name: value}` |
 | `result.table()` | the table above as a pandas DataFrame (columns `quantity`, `estimate`, `SE`, `RSE %`, `CI 2.5 %`, `CI 97.5 %`, `also`) |
 | `result.se`, `result.cov` | standard errors, and the covariance matrix of the estimates |
+| `result.corr` | the correlations of the estimates, one row and column per quantity (after `nuts`, over the draws); the passport adds the eigenvalues of this matrix, as NONMEM's `$COV PRINT=E` |
 | `result.m2ll`, `result.status` | −2LL and the status |
 | `result.covariance_status` | `"ok"`, or why there are no standard errors |
 | `result.shrinkage` | `{parameter: shrinkage}` (`laplace`) |
