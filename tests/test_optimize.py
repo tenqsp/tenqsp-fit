@@ -279,6 +279,33 @@ options checks=quick
     assert np.all(np.isnan(r.table()["SE"].to_numpy(dtype=float)))
 
 
+def test_progress_shows_one_step():
+    """The progress is shown from a copy taken under the lock the starts write under, so a
+    line never pairs one step's -2LL with another step's values."""
+    import threading
+
+    seen = []
+
+    class Shown:
+        def update(self, steps, m2ll, X, done, seconds, last=False, status=None):
+            seen.append((steps, m2ll, X, done))
+
+    steps, m2ll, done = np.array([3]), np.array([10.0]), np.array([False])
+    X = np.array([[1.0, 2.0]])
+    lock = threading.Lock()
+    show = O.locked_show(Shown(), lock, steps, m2ll, X, done, 0.0)
+    show()
+    steps[0], m2ll[0], X[0] = 4, 9.0, [1.5, 2.5]  # the next step, after the copy
+    assert seen[0][0][0] == 3 and seen[0][1][0] == 10.0 and list(seen[0][2][0]) == [1.0, 2.0]
+    with lock:  # while a start writes, the display waits
+        t = threading.Thread(target=show)
+        t.start()
+        t.join(0.2)
+        assert t.is_alive()
+    t.join()
+    assert seen[1][1][0] == 9.0 and list(seen[1][2][0]) == [1.5, 2.5]
+
+
 def test_trace_log_axis():
     """A quantity whose path spans more than a factor 10 is drawn on a log axis (a ridge
     walked in log k and log beta shows as two lines, not as a jump to zero); others not."""

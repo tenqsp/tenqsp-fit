@@ -380,6 +380,20 @@ def test_method_must_suit(folder):
         tf.Problem(tq.Model.from_text(PK)).options(start=8)
 
 
+def test_written_likelihood_with_varying_parameters(folder):
+    """A written likelihood with parameters that vary between units is refused by check()
+    (laplace and nuts), not when the fit starts; 'pi' gets the number, not 'estimate pi'."""
+    p = python_problem(folder)
+    p._errors.clear()
+    p.likelihood("conc", "-0.5*((DV - conc)/0.7)^2 - log(0.7) - 0.5*log(2*pi)")
+    with pytest.raises(tf.ProblemError) as e:
+        p.check()
+    msg = str(e.value)
+    assert "written likelihood with parameters that vary between units (method laplace)" in msg
+    assert "'pi' is not a known name" in msg and "3.141592653589793" in msg
+    assert "estimate pi" not in msg
+
+
 # ----------------------------------------------------------------------------- distributions
 def test_distributions():
     d = tf.lognormal(sdlog=0.5, median=1.5)

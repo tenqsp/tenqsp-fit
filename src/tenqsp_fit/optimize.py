@@ -694,6 +694,7 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
     trace: list[tuple] = []
     failed = np.zeros(n, int)
     stop = threading.Event()
+    lock = threading.Lock()  # a step's -2LL and values are shown together
 
     def run(j):
         u = jnp.asarray(U_start[j])
@@ -707,24 +708,35 @@ def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
             if stop.is_set():
                 return
             u, state, d, okj, f = step(u, state)
-            steps[j] = it
             failed[j] += int(not bool(okj))
-            m2ll[j] = float(f) + const
-            X[j] = np.asarray(to_x(u, sc))
-            trace.append((j + 1, it, m2ll[j], *X[j]))
+            fj, xj = float(f) + const, np.asarray(to_x(u, sc))
+            with lock:
+                steps[j], m2ll[j], X[j] = it, fj, xj
+            trace.append((j + 1, it, fj, *xj))
             if bool(d):
                 done[j] = True
                 return
 
     shown = _Progress(progress, names, n, label, problem_name, trace)
     futures = [workers.submit(run, j) for j in range(n)]
-    status, stopped_by = watch(futures, stop, timeout, t_start,
-                               lambda: shown.update(steps, m2ll, X, done,
-                                                    time.perf_counter() - t_start))  # fmt: skip
+    show = locked_show(shown, lock, steps, m2ll, X, done, t_start)
+    status, stopped_by = watch(futures, stop, timeout, t_start, show)
     workers.shutdown()
-    shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True, status=status)
+    show(last=True, status=status)
     return _Run(X=X, steps=steps, done=done, failed=failed, trace=trace, status=status,
                 stopped_by=stopped_by)  # fmt: skip
+
+
+def locked_show(shown, lock, steps, m2ll, X, done, t_start):
+    """``shown.update`` with a copy of the starts' state taken under ``lock``, so a line
+    never shows one step's -2LL with another step's values."""
+
+    def show(last=False, status=None):
+        with lock:
+            state = steps.copy(), m2ll.copy(), X.copy(), done.copy()
+        shown.update(*state, time.perf_counter() - t_start, last=last, status=status)
+
+    return show
 
 
 def watch(futures, stop, timeout, t_start, show) -> tuple[str | None, str | None]:

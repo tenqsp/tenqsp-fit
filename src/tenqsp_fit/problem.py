@@ -44,6 +44,7 @@ METHODS = {
 }
 # a method's options with their defaults (printed in the summary)
 METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000}}
+CONSTANTS = {"pi": 3.141592653589793, "e": 2.718281828459045}  # names users may expect
 # options with their defaults (printed in the summary; rule: no silent defaults)
 OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None,
            "checks": "full", "timeout": None}  # fmt: skip
@@ -784,6 +785,15 @@ class Problem:
                             f"{c.lhs} where {x.column} < {_arg(c.below)} below {_arg(c.below)}.",
                         )
         written = {_key(e.lhs) for e in self._likelihoods}
+        method = self._method.name if self._method is not None else None
+        if self._likelihoods and varying and method in ("laplace", "nuts"):
+            add(
+                self._likelihoods[0],
+                f"a written likelihood with parameters that vary between units (method "
+                f"{method}) is not available yet; use an error model (error <observable> ~ "
+                "additive(...), proportional, combined or power), or fit one set of parameters "
+                "(estimate ... = <start>) with method optimize.",
+            )
         for lk in self._likelihoods:
             if _key(lk.lhs) not in linked:
                 add(lk, f"likelihood {lk.lhs}: {lk.lhs} is not linked to the data.")
@@ -1096,6 +1106,11 @@ class Problem:
         }
 
     def _unknown_in_formula(self, n: str, where: str, columns: set[str]) -> str:
+        if n in CONSTANTS:  # TenQSP formulas have no named constants
+            return (
+                f"{where}: '{n}' is not a known name: formulas have no named constants. "
+                f"Write the number instead: {CONSTANTS[n]!r}."
+            )
         if n in self._m.definitions:
             return f"{where}: '{n}' is a formula of the model, not a quantity of the fit."
         cands = self._fit_names() | set(self._m.params) | columns

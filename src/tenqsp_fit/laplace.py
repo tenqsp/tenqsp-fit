@@ -68,6 +68,7 @@ from .optimize import (
     covariance,
     draw_starts,
     finish,
+    locked_show,
     no_covariance,
     scales,
     to_u,
@@ -373,6 +374,7 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     messages = [""] * n
     trace: list[tuple] = []
     stop = threading.Event()
+    lock = threading.Lock()  # a step's -2LL and values are shown together
 
     def run(j):
         warm = {"Z": Z0}
@@ -396,18 +398,20 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
 
         def callback(intermediate_result):  # scipy passes the step by this name
             res = intermediate_result
-            steps[j] += 1
-            m2ll[j] = float(res.fun)
-            X[j] = np.asarray(to_x(jnp.asarray(res.x), sc))
-            trace.append((j + 1, int(steps[j]), m2ll[j], *X[j]))
+            fj, xj = float(res.fun), np.asarray(to_x(jnp.asarray(res.x), sc))
+            with lock:
+                steps[j] += 1
+                m2ll[j], X[j] = fj, xj
+            trace.append((j + 1, int(steps[j]), fj, *xj))
 
         try:
             res = minimize(fun, U_start[j], jac=True, method="BFGS", callback=callback,
                            options={"gtol": GTOL, "maxiter": maxiter})  # fmt: skip
         except _Stopped:
             return
-        X[j] = np.asarray(to_x(jnp.asarray(res.x), sc))
-        m2ll[j] = float(res.fun)
+        xj = np.asarray(to_x(jnp.asarray(res.x), sc))
+        with lock:
+            X[j], m2ll[j] = xj, float(res.fun)
         done[j] = bool(res.success) or float(np.max(np.abs(res.jac))) < 10 * GTOL
         messages[j] = "" if done[j] else str(res.message)
         if not done[j] and res.nit < maxiter:  # stopped short (e.g. precision loss)
@@ -416,11 +420,10 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
 
     shown = _Progress(progress, names, n, "laplace", problem.name, trace)
     futures = [starts_pool.submit(run, j) for j in range(n)]
-    status, stopped_by = watch(futures, stop, seconds(opts.get("timeout")), t_start,
-                               lambda: shown.update(steps, m2ll, X, done,
-                                                    time.perf_counter() - t_start))  # fmt: skip
+    show = locked_show(shown, lock, steps, m2ll, X, done, t_start)
+    status, stopped_by = watch(futures, stop, seconds(opts.get("timeout")), t_start, show)
     starts_pool.shutdown()
-    shown.update(steps, m2ll, X, done, time.perf_counter() - t_start, last=True, status=status)
+    show(last=True, status=status)
 
     final = np.array([float(v) for v in pool.map(obj, list(X))])
     rank = final + np.array([float(pen(jnp.asarray(to_u(x, sc)))) for x in X])
