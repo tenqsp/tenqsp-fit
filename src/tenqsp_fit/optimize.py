@@ -155,14 +155,17 @@ NEAR_BOUND = 0.01  # an estimate within 1 % of its interval's width from a bound
 
 def near_bounds(names, x, bounds) -> dict[str, tuple[str, float]]:
     """Estimates that ended near a bound written for them: ``{name: ("lower" or "upper",
-    bound)}``."""
+    bound)}``. Within 1 % of the interval's width; for a bound on one side, within 1 % of the
+    larger of the bound and the estimate (in size)."""
     out = {}
     for n, v, (lo, hi) in zip(names, x, bounds, strict=True):
-        if not (np.isfinite(lo) and np.isfinite(hi)):
-            continue
-        if v - lo <= NEAR_BOUND * (hi - lo):
+        if np.isfinite(lo) and np.isfinite(hi):
+            width = hi - lo
+        else:
+            width = max(abs(b) for b in (lo, hi, v) if np.isfinite(b))
+        if np.isfinite(lo) and v - lo <= NEAR_BOUND * width:
             out[n] = ("lower", float(lo))
-        elif hi - v <= NEAR_BOUND * (hi - lo):
+        elif np.isfinite(hi) and hi - v <= NEAR_BOUND * width:
             out[n] = ("upper", float(hi))
     return out
 

@@ -19,6 +19,7 @@ can be kept.
 | `censor conc where BLQ == 1 below LLOQ` | `p.censor("conc", below="LLOQ", where="BLQ == 1")` |
 | `estimate ke = 0.08` | `p.estimate("ke", 0.08)` |
 | `estimate F = 0.5 in (0, 1)` | `p.estimate("F", 0.5, bounds=(0, 1))` |
+| `estimate n = 2 in (1, inf)` | `p.estimate("n", 2, bounds=(1, None))` (or `np.inf`) |
 | `estimate ka ~ lognormal(median=1.5, sdlog=0.5)` | `p.estimate("ka", tf.lognormal(median=1.5, sdlog=0.5))` |
 | `... sdlog=fix(0.6)` | `... sdlog=tf.fix(0.6)` |
 | `... median=CL_pop*(WT/70)^0.75` | `... median="CL_pop*(WT/70)^0.75"` (a formula is text) |

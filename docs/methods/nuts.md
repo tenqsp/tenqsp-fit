@@ -34,6 +34,7 @@ or a default, centred on the starting value, by its estimation scale:
 | positive (log scale) | `lognormal(median=start, sdlog=2)`: 95 % within a factor 50 of the start |
 | any sign | `normal(mean=start, sd=...)`, the SD twice the start's size; a start of 0 needs a written prior |
 | bounded, `in (lo, hi)` | `uniform(lower=lo, upper=hi)` |
+| one bound, `in (lo, inf)` or `in (-inf, hi)` | `lognormal(median=start - lo, sdlog=2)` for x − lo, or the same for hi − x |
 | the correlations of a `correlate` block | LKJ(2) on the block's correlation matrix |
 
 `problem.summary()` lists every prior and marks the defaults; the result's table does too.

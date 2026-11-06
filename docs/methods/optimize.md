@@ -40,7 +40,8 @@ model's outputs (the Jacobian of the residuals, or the gradient of −2LL). The 
 line says which was used.
 
 **Estimation scales.** Each quantity is estimated on a scale where any value is allowed:
-between bounds `in (lo, hi)` on the logit scale, above a single bound as \(lo + e^u\), else
+between bounds `in (lo, hi)` on the logit scale, above a single bound `in (lo, inf)` as
+\(lo + e^u\), below one `in (-inf, hi)` as \(hi - e^u\), else
 on the log scale when its start is above 0, else as it is. A positive start therefore keeps
 the quantity positive. `problem.summary()` lists each quantity's scale.
 

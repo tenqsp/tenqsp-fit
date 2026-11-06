@@ -107,7 +107,8 @@ about where it stopped.
 ### At a bound
 
 A **warning** when an estimate ended within 1 % of the width of its interval from a bound
-written for it (`estimate k = 0.3 in (0.01, 0.4)`), as NONMEM's "near its boundary". It is
+written for it (`estimate k = 0.3 in (0.01, 0.4)`), as NONMEM's "near its boundary"; for a
+bound on one side (`in (1, inf)`), within 1 % of the bound's or the estimate's size. It is
 also a Python warning when the fit ends.
 
 ```text

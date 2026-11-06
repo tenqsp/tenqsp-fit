@@ -9,6 +9,7 @@ its value from the model; the summary lists those under `from model`.
 | `estimate ke = 0.08` | one value for all units, estimated from this start |
 | `estimate ka ~ lognormal(median=1.5, sdlog=0.5)` | ka varies between units; its median and sdlog are estimated |
 | `estimate F = 0.5 in (0, 1)` | one value, kept inside the bounds |
+| `estimate n = 2 in (1, inf)` | one value, kept above 1 (`in (-inf, 0)`: below 0) |
 | `fix V = 30` | held at 30 (NONMEM's FIX) |
 | `correlate ka, CL` | the correlation of ka and CL between units is estimated |
 | `CL = CL_pop*(WT/70)^beta` | a model parameter set by a formula, for this fit (NONMEM's $PK) |
@@ -57,6 +58,7 @@ step outside its range:
 | one value with a positive start, a median, an SD, a CV | the log scale (stays positive) |
 | `normal`'s mean, `lognormal`'s meanlog, one value with a start of 0 or below | as is (any sign) |
 | a value with bounds `in (lo, hi)`, a logitnormal's median | within the bounds (a logit scale) |
+| a value with one bound, `in (lo, inf)` or `in (-inf, hi)` | above lo as lo + e<sup>u</sup>, below hi as hi − e<sup>u</sup> |
 | a correlation | within (−1, 1) |
 
 The summary lists the scales, and writes each one-value estimate in the long form that shows
@@ -236,6 +238,7 @@ terms). With `method nuts` every quantity has a prior: written, or by default:
 | positive (log scale) | `lognormal(median=start, sdlog=2)`: 95 % within a factor 50 of the start |
 | any sign | `normal(mean=start, sd=2*abs(start))`; a start of 0 needs a written prior |
 | bounded `in (lo, hi)` | `uniform(lower=lo, upper=hi)` |
+| one bound, `in (lo, inf)` or `in (-inf, hi)` | the positive rule for x − lo or hi − x |
 | correlations | LKJ(2) on each `correlate` block |
 
 A prior must give density to every value the quantity can take: a lognormal prior on a

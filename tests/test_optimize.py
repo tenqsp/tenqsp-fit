@@ -95,6 +95,20 @@ def test_bounds_keep_values_inside(tmp_path):
     assert "at a bound: ka ended at 1.3, near its upper bound 1.3" in repr(r)  # the doctor
 
 
+def test_one_sided_bounds(tmp_path, oracle):
+    """A bound on one side: estimated as lo + exp(u) or hi - exp(u). Away from the bound the
+    fit is scipy's; with the optimum beyond it, the estimate ends at the bound."""
+    x, _, _ = oracle
+    r = tf.fit(problem(tmp_path, estimate="ka = 1 in (0.5, inf), CL = 0.05 in (-inf, 1), ke = 0.1"))
+    assert r.scales[:2] == [("above", 0.5), ("below", 1.0)]
+    np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], x, rtol=1e-5)
+    assert r.near_bounds == {}
+    with pytest.warns(O.NearBoundWarning, match="ka ended at 1.3, near its upper bound 1.3"):
+        r = tf.fit(problem(tmp_path, estimate="ka = 1.2 in (-inf, 1.3), CL = 0.05, ke = 0.1"))
+    assert r.estimates["ka"] < 1.3
+    assert r.estimates["ka"] == pytest.approx(1.3, abs=1e-3)  # the optimum lies above
+
+
 def test_failed_starts_are_drawn_again(tmp_path):
     """ka = sqrt(q): a start with q < 0 does not run (NaN); it is drawn again."""
     p = problem(tmp_path, estimate="q = 1.2, CL = 0.05, ke = 0.1", extra="ka = sqrt(q)\n",

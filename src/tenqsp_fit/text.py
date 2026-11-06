@@ -11,6 +11,7 @@ statement is one call of ``Problem``'s Python API, so text and Python mean the s
 from __future__ import annotations
 
 import ast
+import math
 import re
 import textwrap
 from dataclasses import dataclass
@@ -175,6 +176,14 @@ def _number(text: str, what: str) -> float:
     if f.names:
         raise _Problem(f"{what}: '{text}' is not a number.")
     return float(f.jax([])())
+
+
+def _bound(text: str) -> float:
+    """A bound: a number, or ``inf``/``-inf`` for an open side."""
+    t = text.strip().replace(" ", "")
+    if t in ("inf", "+inf", "-inf"):
+        return -math.inf if t == "-inf" else math.inf
+    return _number(text, "bounds")
 
 
 def _call(text: str, what: str) -> tuple[str, list[ast.expr], list[ast.keyword], str]:
@@ -370,9 +379,10 @@ class _Reader:
                 m = re.fullmatch(r"\((.*),(.*)\)", interval)
                 if not m:
                     raise _Problem(
-                        f"write the bounds as an interval: estimate {name} = {value} in (0, 1)."
+                        f"write the bounds as an interval: estimate {name} = {value} in (0, 1), "
+                        "or in (0, inf) for a bound on one side."
                     )
-                bounds = (_number(m.group(1), "bounds"), _number(m.group(2), "bounds"))
+                bounds = tuple(_bound(g) for g in m.groups())
             if value.startswith("fix("):
                 raise _Problem(f"a fixed value is written fix {name} = value.")
             self.p.estimate(name, _number(value, f"estimate {name}"), bounds=bounds)

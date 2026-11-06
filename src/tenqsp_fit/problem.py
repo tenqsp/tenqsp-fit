@@ -113,6 +113,32 @@ def _spread_zero(dist: Distribution) -> bool:
     return False
 
 
+def _bounds(name: str, bounds) -> tuple[float, float]:
+    """``(lo, hi)`` from two numbers, one side ``None`` or infinite for a one-sided bound."""
+    hint = "e.g. (0, 1), or (1, None) for above 1"
+    try:
+        lo, hi = bounds
+    except (TypeError, ValueError):
+        raise TypeError(f"estimate {name}: bounds are two numbers, {hint}.") from None
+    side = []
+    for b, inf in ((lo, -math.inf), (hi, math.inf)):
+        if b is None or (isinstance(b, int | float) and not isinstance(b, bool) and b == inf):
+            side.append(inf)
+            continue
+        try:
+            side.append(_as_float(b, f"estimate {name}: bounds"))
+        except (TypeError, ValueError):
+            raise TypeError(f"estimate {name}: bounds are two numbers, {hint}.") from None
+    if not (math.isfinite(side[0]) or math.isfinite(side[1])):
+        raise ValueError(f"estimate {name}: the bounds are both open; leave out bounds.")
+    if not side[0] < side[1]:
+        raise ValueError(
+            f"estimate {name}: the lower bound {_num(side[0])} must be below the upper bound "
+            f"{_num(side[1])}."
+        )
+    return side[0], side[1]
+
+
 def _not_varying(name: str, dist: Distribution) -> _Estimate:
     """``estimate x ~ family(location, spread=0)``: one value for all units, estimated on the
     family's scale (normal: any sign; lognormal: log scale; logitnormal: within (0, 1))."""
@@ -398,7 +424,9 @@ class Problem:
         """Estimate a parameter. ``value`` is a number (one value for all units, estimated from
         this start) or a distribution (the parameter varies between units:
         ``tf.lognormal(median=1.5, sdlog=0.5)``; each number is the start of an estimated
-        quantity, ``ka.median`` and ``ka.sdlog``). ``bounds=(0, 1)`` keeps a value inside."""
+        quantity, ``ka.median`` and ``ka.sdlog``). ``bounds=(0, 1)`` keeps a value inside;
+        ``bounds=(1, None)`` keeps it above 1 and ``bounds=(None, 0)`` below 0 (``np.inf`` and
+        ``-np.inf`` work as well as ``None``)."""
         self._new_name(name, "estimate")
         if isinstance(value, Distribution):
             if bounds is not None:
@@ -416,10 +444,7 @@ class Problem:
             raise TypeError(f"estimate {name}: a fixed value is written fix {name} = value.")
         start = _as_float(value, f"estimate {name}")
         if bounds is not None:
-            try:
-                lo, hi = (_as_float(b, f"estimate {name}: bounds") for b in bounds)
-            except (TypeError, ValueError):
-                raise TypeError(f"estimate {name}: bounds are two numbers, e.g. (0, 1).") from None
+            lo, hi = _bounds(name, bounds)
             if not lo < start < hi:
                 raise ValueError(
                     f"estimate {name}: the start {_num(start)} must be inside the bounds "
