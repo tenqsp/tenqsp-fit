@@ -24,6 +24,7 @@ import pandas as pd
 
 REFRESH = 2.0  # seconds between redraws
 NCOLS = 4
+LOG_AXIS = 10.0  # a quantity whose path spans more than this factor is drawn on a log axis
 
 
 def in_notebook() -> bool:
@@ -107,6 +108,11 @@ def draw_trace(trace: pd.DataFrame, names, *, title: str = "", fig=None, value: 
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax.tick_params(labelsize=7)
         ax.ticklabel_format(axis="y", useOffset=False, style="plain")
+    for ax, name in zip(axes[1:], names, strict=False):  # a wide positive range: log axis
+        v = trace[name].to_numpy(dtype=float) if len(trace) else np.array([])
+        v = v[np.isfinite(v)]
+        if len(v) and v.min() > 0 and v.max() > LOG_AXIS * v.min():
+            ax.set_yscale("log")
     for ax in axes[max(0, n_panels - ncols) : n_panels]:
         ax.set_xlabel(xlabel, fontsize=8)
     if title:

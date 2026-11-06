@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""The doctor (PRD F6): what a fit can and cannot tell, run at the end of every ``tf.fit``.
+"""The doctor: what a fit can and cannot tell, run at the end of every ``tf.fit``.
 ``result.doctor()`` returns its findings; ``print(result)`` ends with them.
 
 Each finding has a ``check``, a ``severity`` ("problem": the results are wrong or
@@ -29,8 +29,8 @@ found with its numbers, and what to do.
 - **failed runs** (F4.10); for NUTS, the convergence checks (F4.6) and how much the data
   narrowed each prior (posterior SD over prior SD, on the estimation scale).
 
-The tolerance and gradient checks solve the model again (B1: about 8 s; B3: about 100 s);
-``options checks=quick`` leaves them out.
+The tolerance and gradient checks solve the model again (theophylline: about 8 s; an
+infection-age model: about 100 s); ``options checks=quick`` leaves them out.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ import pandas as pd
 
 __all__ = ["Doctor", "Finding", "examine"]
 
-RIDGE = 1e-3  # singular-value ratio below which a direction is a ridge (PRD F6.1)
+RIDGE = 1e-3  # singular-value ratio below which a direction is a ridge
 LOADING = 0.3  # loadings named in a ridge
 WEAK_FACTOR = 10.0  # a log-scale quantity whose 95 % interval spans more than this factor
 WEAK_RANGE = 0.5  # within bounds: a 95 % interval covering more than this part of the range
@@ -538,8 +538,8 @@ def _plausible(f, u0, L, best, rng):
     """``GRAD_DIRECTIONS`` points drawn from the estimates' normal approximation (with their
     correlations) where -2LL is within the 99 % chi-square bound of the best: the region the
     data allow, and the only one NUTS visits. Far outside it the model can be extreme and
-    differences noisy (B3: -2LL 10^4 against -30 at the best). Draws outside are redrawn,
-    then drawn closer."""
+    differences noisy (an infection-age model: -2LL 10^4 against -30 at the best). Draws
+    outside are redrawn, then drawn closer."""
     from scipy.stats import chi2
 
     bound = float(chi2.ppf(0.99, len(u0)))

@@ -19,7 +19,7 @@ So -2LL = sum over measured values of ``((DV - f)/sd)^2 + 2 log(sd)``, plus
 no estimate, standard error or likelihood-ratio test on the same data. Monolix reports -2LL
 with it; NONMEM's objective function value (OFV) leaves it out: OFV = -2LL - n log(2 pi).
 
-**Predictions near zero** (PRD F2.7). A population driven extinct, or solver round-off below
+**Predictions near zero.** A population driven extinct, or solver round-off below
 ``atol`` (which can be slightly negative), would make ``log10(bact)`` NaN or minus infinity.
 Inside a transformed link the observables are taken through the smooth floor
 ``(v + sqrt(v^2 + 4 eps^2))/2`` (``v`` for ``v >> eps``, ``eps`` at 0, above 0 and rising

@@ -4,8 +4,8 @@
 
 The fitted model is compiled once for all the points: the held value is an input of the
 compiled functions, not a new problem (a new problem per point compiled the model again, about
-two thirds of each point's time on B1). What is minimized is what the fit minimized (-2LL, plus
-the written priors); what is reported is -2LL."""
+two thirds of each point's time on theophylline). What is minimized is what the fit minimized
+(-2LL, plus the written priors); what is reported is -2LL."""
 
 from __future__ import annotations
 

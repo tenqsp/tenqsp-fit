@@ -38,7 +38,7 @@ __all__ = ["Problem"]
 
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 METHODS = {
-    "optimize": ("one set of parameters (least squares or maximum likelihood)", ()),
+    "optimize": ("one set of parameters: least squares or maximum likelihood", ()),
     "laplace": ("population, FOCE-I", ()),
     "nuts": ("Bayesian, NUTS sampling", ("chains", "warmup", "samples")),
 }
@@ -1260,13 +1260,17 @@ class Problem:
         unit = self._unit
         n_units = df[unit].nunique() if (df is not None and unit) else 1
         out = []
-        head = f"{self.name}: model {m.name} ({m.n_states} states)"
+        head = f"{self.name}: model {m.name} ({m.n_states} state{'' if m.n_states == 1 else 's'})"
         if df is not None:
             obs, doses = D.observation_rows(df), D.dose_rows(df)
             src = f'"{self._data.source}"' if self._data.source else "a table given in Python"
             n_doses = n_units if (self._doses and self._doses.column) else int(doses.sum())
+            observes = [x for x in self._links if isinstance(x, _Observe)]
+            # the measurements the links read (a wide table has no DV rows); else the DV rows
+            n_obs = sum(int(self._rows_of(x, df).sum()) for x in observes) if observes else None
+            n_obs = int(obs.sum()) if n_obs is None else n_obs
             head += (
-                f", data {src}: {n_units} unit{'s' * (n_units != 1)}, {int(obs.sum())} "
+                f", data {src}: {n_units} unit{'s' * (n_units != 1)}, {n_obs} "
                 f"observations, {n_doses} doses"
             )
         else:
@@ -1399,8 +1403,10 @@ class Problem:
             for k, v in {**METHOD_DEFAULTS.get(meth.name, {}), **meth.options}.items()
         )
         row("method", f"{meth.name} ({METHODS[meth.name][0]})" + (f", {mo}" if mo else ""))
+        from .optimize import DEFAULT_MAXITER  # the fit's limit (the fast fit's, for nuts)
+
         opts = []
-        for k, default in OPTIONS.items():
+        for k, default in {**OPTIONS, "maxiter": DEFAULT_MAXITER}.items():
             if k in self._options:
                 opts.append(f"{k} {_opt(self._options[k])}")
             elif default is not None:

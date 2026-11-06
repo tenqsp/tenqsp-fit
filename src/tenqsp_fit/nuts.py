@@ -22,7 +22,7 @@ per draw. (3) Warmup tunes the step size (dual averaging, target acceptance 0.8)
 draws. All chains run as one batched (``jax.vmap``) computation, in chunks of ``CHUNK`` draws,
 between which the progress is shown and a stop (Ctrl-C) keeps the draws so far.
 
-**Convergence** (PRD F4.6), per quantity and chain: rank-normalized split R-hat, bulk and tail
+**Convergence**, per quantity and chain: rank-normalized split R-hat, bulk and tail
 effective sample sizes (ArviZ), divergences after warmup, energy BFMI per chain, and how often
 a trajectory reached the maximum tree depth.
 """
@@ -422,7 +422,7 @@ class PosteriorResult(Result):
         return self.per_chain.copy()
 
     def warnings(self) -> list[str]:
-        """The convergence checks that fail (PRD F4.6)."""
+        """The convergence checks that fail."""
         out = []
         t = self.table()
         bad = t[t["R-hat"] > RHAT_MAX]
@@ -520,8 +520,8 @@ class PosteriorResult(Result):
         for r in t.itertuples(index=False):
             ci = f"({r[4]:.4g}, {r[5]:.4g})"
             ess_ = min(r[7], r[8])
-            lines.append(f"{r[0]:<22}{r[1]:>11.5g}{r[3]:>10.3g}   {ci:<22}{r[6]:>7.3f}"
-                         f"{ess_:>7.0f}  {r[9]}")  # fmt: skip
+            lines.append(f"{r[0]:<21} {r[1]:>10.5g} {r[3]:>9.3g}   {ci:<21} {r[6]:>6.3f}"
+                         f" {ess_:>6.0f}  {r[9]}")  # fmt: skip
         lines += [f"note: {n}" for n in self.notes]
         if getattr(self, "_doctor", None) is not None:  # the doctor reports the warnings
             return "\n".join(lines + self._doctor_lines())

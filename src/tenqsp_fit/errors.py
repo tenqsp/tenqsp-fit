@@ -30,7 +30,8 @@ class FitTextError(ProblemError):
         self.problems = list(problems)
         ValueError.__init__(
             self,
-            f"The fit text has {len(self.problems)} problem(s):\n\n" + "\n\n".join(self.problems),
+            f"The fit text has {len(self.problems)} problem{'s' * (len(self.problems) != 1)}:\n\n"
+            + "\n\n".join(self.problems),
         )
 
 

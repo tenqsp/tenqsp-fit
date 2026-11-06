@@ -73,7 +73,7 @@ class Prediction:
                                 alpha=0.12, lw=0, label="a new unit, 90 %")  # fmt: skip
             if self.kind != ESTIMATES:
                 ax.fill_between(d.time, d["2.5 %"], d["97.5 %"], color="#1f3b73", alpha=0.3,
-                                lw=0, label=f"typical unit, 95 % ({self.kind})")  # fmt: skip
+                                lw=0, label=f"typical unit, 95 %, {self.kind}")  # fmt: skip
             ax.plot(d.time, d["median"], color="#1f3b73", lw=1.6, label="typical unit, median")
             if log:
                 ax.set_yscale("log")

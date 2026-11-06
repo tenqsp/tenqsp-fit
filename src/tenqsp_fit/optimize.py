@@ -15,9 +15,9 @@
 - **Starts.** Start 1 is the values written; the others are drawn around them on those
   scales (log scale: a factor within about 5 either way, 95 %; bounded: 1 on the logit scale;
   as is: half the value, at least 0.5) with the ``seed``. A start whose run fails or gives a
-  non-finite residual is drawn again (PRD F4.10). Each start runs in its own thread, so the
-  starts run on separate cores (B3, 8 starts: 7x faster than one ``jax.vmap`` call, which on
-  the CPU runs them one after the other).
+  non-finite residual is drawn again. Each start runs in its own thread, so the starts run
+  on separate cores (an infection-age model, 8 starts: 7x faster than one ``jax.vmap`` call,
+  which on the CPU runs them one after the other).
 - **Failed runs** during the fit are rejected steps: every residual becomes a large constant,
   so the step is refused and the step size shrinks. They are counted.
 - **Progress.** ``progress text``: a block rewritten in place in a terminal, a line every 10 s
@@ -57,6 +57,7 @@ SPREAD_LOG = math.log(5) / 2  # starts on the log scale: 95 % within a factor 5
 MAX_REDRAWS = 20
 DEFAULT_MAXITER = 200
 TOL = 1e-8  # Levenberg-Marquardt's rtol and atol (changes of the parameters and of -2LL)
+SINGULAR = 1e-12  # Hessian eigenvalue ratio below which it is singular (no standard errors)
 
 
 # ----------------------------------------------------------------------------- scales
@@ -233,7 +234,12 @@ def covariance(value, u, sc, *, gradient=None) -> dict:
     status = "ok"
     try:
         np.linalg.cholesky(H)
+        eig = np.linalg.eigvalsh(H)
+        if eig[0] <= SINGULAR * eig[-1]:  # positive only by round-off: an exact ridge
+            raise np.linalg.LinAlgError
         cov_u = 2.0 * np.linalg.inv(H)
+        if not np.all(np.isfinite(np.diag(cov_u)) & (np.diag(cov_u) > 0)):
+            raise np.linalg.LinAlgError
     except np.linalg.LinAlgError:
         cov_u = np.full((p, p), np.nan)
         status = (
@@ -292,12 +298,15 @@ class Result:
             raise ImportError(
                 "plots need matplotlib: pip install matplotlib (or tenqsp-fit[plot])."
             ) from None
+        from matplotlib.ticker import MaxNLocator
+
         ok = self.starts[np.isfinite(self.starts["-2LL"])]
         v = np.sort(ok["-2LL"].to_numpy())
         if ax is None:
             _, ax = plt.subplots(figsize=(5, 3.2))
         d = v - v[0]  # above the best; differences below 0.1 are one optimum
         ax.plot(np.arange(1, len(v) + 1), d, "o-", color="#1f77b4")
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax.axhspan(-0.05, 0.1, color="#2ca02c", alpha=0.12, lw=0)
         ax.set_ylim(-0.05 * max(d[-1], 1.0), 1.05 * max(d[-1], 1.0))
         ax.ticklabel_format(axis="y", useOffset=False)
@@ -525,7 +534,8 @@ class Result:
             ci = f"({row[4]:.4g}, {row[5]:.4g})" if np.isfinite(row[4]) else ""
             rse = f"{row[3]:.3g}" if np.isfinite(row[3]) else ""
             se = f"{row[2]:.4g}" if np.isfinite(row[2]) else ""
-            lines.append(f"{row[0]:<22}{row[1]:>12.5g}{se:>11}{rse:>7}   {ci:<22}  {row[6]}")
+            # each column keeps a space before it, however long a number (same widths)
+            lines.append(f"{row[0]:<21} {row[1]:>11.5g} {se:>10} {rse:>6}   {ci:<22}  {row[6]}")
         if getattr(self, "with_priors", None) is not None:
             lines += ["", f"with the written priors: the estimates are the posterior mode; "
                       f"-2LL plus the priors' terms {self.with_priors:.4f}"]  # fmt: skip

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""Priors: written (``prior CL.median ~ lognormal(median=0.04, sdlog=0.5)``) or by default
-(PRD F3.4), their log-densities as JAX functions, and draws from them (the prior predictive
+"""Priors: written (``prior CL.median ~ lognormal(median=0.04, sdlog=0.5)``) or by default;
+their log-densities as JAX functions, and draws from them (the prior predictive
 check).
 
 **The defaults**, one rule by the scale a quantity is estimated on, centred on its start:

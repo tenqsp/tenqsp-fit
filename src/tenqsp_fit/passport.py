@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""The passport (PRD F11, basic): one document per fit saying what the data determine and
+"""The passport: one document per fit saying what the data determine and
 what they do not, with every default, the checks and how the run can be repeated.
 ``result.passport()``; ``print`` shows it as text, ``.markdown()`` as Markdown,
 ``.to_dict()`` as plain data (JSON); ``result.save(folder)`` writes ``passport.md`` and

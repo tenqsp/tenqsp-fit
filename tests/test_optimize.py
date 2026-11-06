@@ -254,6 +254,48 @@ def test_waterfall(tmp_path):
     assert "3 of 3 starts at the best fit" in ax.get_title()
 
 
+def test_exact_ridge_has_no_standard_errors(tmp_path):
+    """k1 and k2 enter only as k1*k2: the Hessian is singular, positive definite only by
+    round-off; the standard errors fail instead of printing zeros."""
+    times = [0.5, 1, 2, 3, 4, 6, 8]
+    dv = [0.80, 0.61, 0.37, 0.21, 0.14, 0.050, 0.021]
+    pd.DataFrame({"TIME": times, "DV": dv}).to_csv(tmp_path / "decay.csv", index=False)
+    p = tf.Problem.from_text(f"""
+model decay2
+param k1 = 1, k2 = 0.5
+d_t(A) = -k1*k2*A
+A(0) = 1
+observable amount = A
+fit ridge
+data "{tmp_path / "decay.csv"}"
+observe amount = DV
+estimate k1 = 0.8, k2 = 0.4
+error amount ~ proportional(0.1)
+method optimize
+options checks=quick
+""")
+    r = tf.fit(p, progress="none")
+    assert r.covariance_status.startswith("failed")
+    assert np.all(np.isnan(r.table()["SE"].to_numpy(dtype=float)))
+
+
+def test_trace_log_axis():
+    """A quantity whose path spans more than a factor 10 is drawn on a log axis (a ridge
+    walked in log k and log beta shows as two lines, not as a jump to zero); others not."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from tenqsp_fit.live import draw_trace
+
+    k = [5e-8, 1e-8, 2e-9, 4e-10]
+    g = [1.0, 0.95, 0.92, 0.91]
+    m2ll = [9, 5, 4, 3.9]
+    trace = pd.DataFrame({"start": 1, "iteration": range(4), "-2LL": m2ll, "k": k, "g": g})
+    fig = draw_trace(trace, ["k", "g"])
+    shown = [ax for ax in fig.axes if ax.get_visible()]
+    assert [ax.get_yscale() for ax in shown] == ["linear", "log", "linear"]
+
+
 def test_methods_unsuited_and_unknown(tmp_path):
     p = problem(tmp_path)
     with pytest.raises(ValueError, match="method laplace is for parameters that vary"):

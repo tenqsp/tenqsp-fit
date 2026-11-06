@@ -839,7 +839,7 @@ def _sha256(data: bytes) -> str:
 
 
 def run_record(result, text: str | None = None, data_bytes: bytes | None = None) -> dict:
-    """What reproduces a run (PRD F4.7, F11.1): method, status, -2LL, estimates, options, the
+    """What reproduces a run: method, status, -2LL, estimates, options, the
     SHA-256 of the problem text (model and fit) and of the data as read, versions,
     platform."""
     import tenqsp as tq

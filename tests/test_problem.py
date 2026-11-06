@@ -423,7 +423,7 @@ method laplace
     with pytest.raises(tf.FitTextError) as e:
         tf.Problem.from_text(bad)
     msg = str(e.value)
-    assert "4 problem(s)" in msg
+    assert "4 problems:" in msg
     assert "line 10: doses into dept" in msg and "Did you mean 'depot'" in msg
     assert "line 12: estimat ke = 0.08" in msg and "Did you mean 'estimate'" in msg
     assert "line 13:" in msg and "unknown argument 'sd'" in msg
