@@ -1,5 +1,10 @@
 # tenqsp-fit
 
+[![CI](https://github.com/tenqsp/tenqsp-fit/actions/workflows/ci.yml/badge.svg)](https://github.com/tenqsp/tenqsp-fit/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/tenqsp-fit.svg)](https://pypi.org/project/tenqsp-fit/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24040995.svg)](https://doi.org/10.5281/zenodo.24040995)
+
 **Fitting [TenQSP](https://github.com/tenqsp/tenqsp) models to data, with a diagnosis of what
 the data can and cannot determine.**
 

@@ -3,7 +3,12 @@ message: "If you use tenqsp-fit in your work, please cite it as below."
 title: "tenqsp-fit: fitting TenQSP models to data, with a diagnosis of what the data determine"
 type: software
 version: "0.1.0"
-date-released: "2026-11-08"
+date-released: "2026-11-07"
+doi: "10.5281/zenodo.24040995"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.24040995"
+    description: "All versions (resolves to the latest)"
 authors:
   - family-names: Chae
     given-names: Dongwoo
