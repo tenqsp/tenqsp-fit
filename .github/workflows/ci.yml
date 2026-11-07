@@ -4,8 +4,7 @@ name: CI
 # Actions minutes: CI runs on demand (Actions tab, or gh workflow run ci.yml) and on Mondays,
 # not on each push (owner, 2026-11-03). Each run: lint, the tests not marked slow, then the
 # slow ones (NUTS runs, validation against the stored reference fits); Linux, Python 3.12.
-# TenQSP is installed from its main branch: tenqsp-fit 0.1 needs TenQSP 0.7.0, not
-# yet released.
+# TenQSP (0.7.0 or later) comes from PyPI.
 on:
   schedule:
     - cron: "0 4 * * 1"
