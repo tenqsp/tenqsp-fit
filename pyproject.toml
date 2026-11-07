@@ -37,7 +37,7 @@ Repository = "https://github.com/tenqsp/tenqsp-fit"
 [project.optional-dependencies]
 plot = ["matplotlib>=3.8"]
 docs = ["matplotlib>=3.8", "mkdocs>=1.6", "mkdocs-material>=9.5"]
-dev = ["pytest>=8", "pytest-timeout>=2.3", "ruff>=0.6"]
+dev = ["matplotlib>=3.8", "pytest>=8", "pytest-timeout>=2.3", "ruff>=0.6"]  # the tests draw plots
 
 [tool.hatch.version]
 path = "src/tenqsp_fit/__init__.py"
