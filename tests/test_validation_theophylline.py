@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""B1 against reference fits: theophylline (R's Theoph, 12 subjects), one compartment with
+"""Against reference fits: theophylline (R's Theoph, 12 subjects), one compartment with
 first-order absorption, fitted by R's nlme (population; ka and CL lognormal between subjects)
-and nls (each subject alone). The references are stored CSV (``validation/b1``, made by
-``reference.R``). Acceptance (PRD Section 11, B1): each estimate within max(10 %, one reference
+and nls (each subject alone). The references are stored CSV (``validation/theophylline``, made by
+``reference.R``). Acceptance: each estimate within max(10 %, one reference
 SE) of the reference, compared on the log scale; each SE within a factor 1.5 of the
 reference's.
 
@@ -21,7 +21,7 @@ import pytest
 
 import tenqsp_fit as tf
 
-B1 = Path(__file__).parents[1] / "validation" / "b1"
+THEOPH = Path(__file__).parents[1] / "validation" / "theophylline"
 MODEL = """model theoph
 param ka=1.6, CL=0.04, ke=0.086
 d_t(depot) = -ka*depot
@@ -67,12 +67,12 @@ def compare(result, ref, names):
 @pytest.mark.slow
 @pytest.mark.timeout(1200)
 def test_b1_population_against_nlme():
-    file = B1 / "theoph.csv"
+    file = THEOPH / "theoph.csv"
     p = tf.Problem.from_text(MODEL + FIT.format(name="theoph_pop", file=file, estimates=POP,
                                                 method="laplace", options=""))  # fmt: skip
     r = tf.fit(p)
     assert r.status == "converged" and r.covariance_status == "ok"
-    ref = pd.read_csv(B1 / "reference_population_nlme.csv")
+    ref = pd.read_csv(THEOPH / "reference_population_nlme.csv")
     names = {
         "log ka.median": "ka.median",
         "log CL.median": "CL.median",
@@ -93,8 +93,8 @@ def test_b1_population_against_nlme():
 @pytest.mark.slow
 @pytest.mark.timeout(1200)
 def test_b1_each_subject_against_nls(tmp_path):
-    data = pd.read_csv(B1 / "theoph.csv")
-    ref = pd.read_csv(B1 / "reference_individual_nls.csv")
+    data = pd.read_csv(THEOPH / "theoph.csv")
+    ref = pd.read_csv(THEOPH / "reference_individual_nls.csv")
     names = {"log ka": "ka", "log CL": "CL", "log ke": "ke"}
     tables = []
     for s, d in data.groupby("Subject"):

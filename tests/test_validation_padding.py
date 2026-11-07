@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""Padding (PRD F4.9, Section 11): tenqsp-fit runs every unit in one batched TenQSP function,
-the units padded to the largest numbers of doses and samples. The padding must not change the
-likelihood: on B1 made ragged (subjects keep 7 to 11 samples, some get a second dose), -2LL of
+"""Padding: tenqsp-fit runs every unit in one batched TenQSP function, the units padded to the
+largest numbers of doses and samples. The padding must not change the likelihood: on the
+theophylline data made ragged (subjects keep 7 to 11 samples, some get a second dose), -2LL of
 all units at once equals the sum over the units fitted alone, within 0.01 at the default rtol
 (acceptance), at the reference estimates, for the population (Laplace) and pooled objectives."""
 
@@ -14,7 +14,7 @@ import pytest
 
 import tenqsp_fit as tf
 
-B1 = Path(__file__).parents[1] / "validation" / "b1"
+THEOPH = Path(__file__).parents[1] / "validation" / "theophylline"
 MODEL = """model theoph
 param ka=1.6, CL=0.04, ke=0.086
 d_t(depot) = -ka*depot
@@ -40,9 +40,9 @@ X_POOLED = np.array([1.593188, 0.039668, 0.085889, 0.709255])
 
 
 def ragged():
-    """B1 in NONMEM form (dose rows EVID 1), subject i keeping 11 - (i mod 5) samples (the
-    first and a spread of the rest); every third subject a second dose at 12 h."""
-    d = pd.read_csv(B1 / "theoph.csv")
+    """The theophylline data in NONMEM form (dose rows EVID 1), subject i keeping 11 - (i mod 5)
+    samples (the first and a spread of the rest); every third subject a second dose at 12 h."""
+    d = pd.read_csv(THEOPH / "theoph.csv")
     rows = []
     for s, g in d.groupby("Subject"):
         g = g.sort_values("Time")

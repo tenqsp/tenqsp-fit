@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
 #
-# B1 reference fits: theophylline (R's datasets::Theoph, 12 subjects, oral dose; data from
+# Reference fits: theophylline (R's datasets::Theoph, 12 subjects, oral dose; data from
 # Boeckmann, Sheiner and Beal, NONMEM Users Guide Part V, 1994), the
 # one-compartment model with first-order absorption, fitted by R's nlme (population) and nls
 # (each subject). Writes the data and the reference results as CSV next to this file:
 #
-#   Rscript validation/b1/reference.R
+#   Rscript validation/theophylline/reference.R
 #
 # The model, as SSfol: conc = Dose ka ke / (CL (ka - ke)) (exp(-ke t) - exp(-ka t)), with
 # lKe = log ke, lKa = log ka, lCl = log CL (V = CL / ke).

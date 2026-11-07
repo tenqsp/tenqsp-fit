@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""B1 profile-interval coverage (PRD F13.2, Section 11): one subject of the theophylline design
+"""Profile-interval coverage: one subject of the theophylline design
 (subject 1's dose and sampling times), simulated many times from fixed true values (ka 1.5,
 CL 0.04, ke 0.08, additive residual SD 0.7, near the population fit), each replicate fitted
 (method optimize, the residual SD estimated too) and profiled for ka, CL and ke at the 90 %
 level. Acceptance: each interval covers the truth in 0.845-0.955 of 200 replicates (the 99 %
 binomial band); the Wald intervals (log scale) are recorded alongside.
 
-    python validation/b1/profile_coverage.py 200 --workers 12 --summary"""
+    python validation/theophylline/profile_coverage.py 200 --workers 12 --summary"""
 
 from __future__ import annotations
 

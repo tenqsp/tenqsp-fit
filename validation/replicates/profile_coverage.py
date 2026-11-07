@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""B3 profile-interval coverage, design ``both`` (s held at its true value): each replicate is
-simulated and fitted as in ``replicates.py`` (same data, same four starts), then, for k and
-tau at the 90 % level:
+"""Profile-interval coverage of the phage toy, design ``both`` (s held at its true value): each
+replicate is simulated and fitted as in ``replicates.py`` (same data, same four starts), then,
+for k and tau at the 90 % level:
 
 - the profile interval ``result.profile`` walks out from the estimate;
 - the profile-likelihood test at the truth: the quantity held at its true value and the rest
@@ -17,7 +17,7 @@ profile-likelihood set (-2LL within 2.71 of the best) can contain both. Acceptan
 Wald intervals: coverage within the 99 % binomial band for the number of replicates (50:
 0.78-1.00).
 
-    python validation/b3/profile_coverage.py 50 --workers 12 --summary"""
+    python validation/replicates/profile_coverage.py 50 --workers 12 --summary"""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def replicate(seed: int) -> dict:
     names = R.NAMES[:-1]
     true = R.TRUE[: len(names)]
     with tempfile.TemporaryDirectory() as tmp:
-        file = Path(tmp) / "b3.csv"
+        file = Path(tmp) / "data.csv"
         R.dataset(seed).to_csv(file, index=False)
         start = true * np.exp(0.2 * np.random.default_rng(10_000 + seed).normal(size=true.size))
         t0 = time.perf_counter()

@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""Simulation-based calibration of ``method nuts`` (PRD F13.1, small replicate counts in 0.1):
+"""Simulation-based calibration of ``method nuts`` (small replicate counts in 0.1):
 one subject of the theophylline design (subject 1's dose and times), one compartment with
 first-order absorption, lognormal priors on ka, CL and ke, the residual SD known (0.7).
 
 Each replicate draws the truth from the prior, simulates data, samples the posterior (2 chains
 x (300 warmup + 250 draws)) and records the rank of the truth among 99 evenly spaced draws. If
 the sampler draws the posterior, every rank is uniform on 0..99 (Talts et al. 2018).
-Acceptance (PRD Section 11): a chi-square test of uniformity over 10 bins, p > 0.01 / 3 per
+Acceptance: a chi-square test of uniformity over 10 bins, p > 0.01 / 3 per
 parameter (Bonferroni); divergences and R-hat recorded.
 
     python validation/sbc/sbc_pk.py 100 --workers 12 --summary"""
@@ -45,7 +45,7 @@ observable conc = centr*ke/CL
 
 
 def design():
-    d = pd.read_csv(HERE.parent / "b1" / "theoph.csv")
+    d = pd.read_csv(HERE.parent / "theophylline" / "theoph.csv")
     s1 = d[d.Subject == 1]
     return float(s1.Dose.iloc[0]), s1.Time.to_numpy()
 

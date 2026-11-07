@@ -1,9 +1,9 @@
 name: CI
 
-# The repository is private until its first release, so every run spends the account's
-# Actions minutes: CI runs on demand (Actions tab, or gh workflow run ci.yml) and on Mondays,
-# not on each push (owner, 2026-11-03). Each run: lint, the tests not marked slow, then the
-# slow ones (NUTS runs, validation against the stored reference fits); Linux, Python 3.12.
+# While the repository is private, every run spends the account's Actions minutes: CI runs on
+# demand (Actions tab, or gh workflow run ci.yml) and on Mondays, not on each push. Each run:
+# lint, the tests not marked slow, then the slow ones (NUTS runs, validation against the
+# stored reference fits); Linux, Python 3.12.
 # TenQSP (0.7.0 or later) comes from PyPI.
 on:
   schedule:

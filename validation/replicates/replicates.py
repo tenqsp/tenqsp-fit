@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""B3 over replicates: a generic phage infection-age toy (logistic bacteria, infected cells by
+"""Fits over replicates: a generic phage infection-age toy (logistic bacteria, infected cells by
 infection age, free phage) with synthetic true values. Each replicate simulates a new dataset
-from the truth, fits it (method optimize, 4 starts around a point near the truth: B3 has
+from the truth, fits it (method optimize, 4 starts around a point near the truth: this model has
 local optima, and one start from 20 % off can stop at one) and records the estimates, their
 SEs and the doctor's findings, one row per replicate, appended to a CSV (so a run can stop and
 resume).
@@ -13,16 +13,16 @@ tells k and beta apart):
 - ``both``: bacteria (counts below 100/mL kept as censored) and phage at 12 times;
 - ``bacteria``: bacteria only, the same times.
 
-The sharpness of the lysis hazard, s, is held at its true value (owner, 2026-11-03): samples
+The sharpness of the lysis hazard, s, is held at its true value: samples
 every 0.5 h cannot resolve it, and with s free most fits slide towards a step (s -> 0) until
 the iteration limit, which leaves nothing to measure coverage on. ``--s-free`` estimates it
 too, to check that the doctor flags it.
 
-    python validation/b3/replicates.py both 200 --workers 12 --summary
-    python validation/b3/replicates.py bacteria 100 --workers 12 --summary
-    python validation/b3/replicates.py both 50 --s-free --workers 12 --summary
+    python validation/replicates/replicates.py both 200 --workers 12 --summary
+    python validation/replicates/replicates.py bacteria 100 --workers 12 --summary
+    python validation/replicates/replicates.py both 50 --s-free --workers 12 --summary
 
-Acceptance (PRD Section 11, B3, two designs): with bacteria only, the k-beta ridge is reported
+Acceptance (two designs): with bacteria only, the k-beta ridge is reported
 in at least 95 % of replicates; with both, no k-beta ridge, and the 90 % Wald intervals (log
 scale) cover the truth within the binomial band (200 replicates: 0.845-0.955); with s free, s
 is flagged (weakly determined or a ridge) in at least 95 %."""
@@ -126,7 +126,7 @@ def replicate(design: str, seed: int, options: str, s_free: bool = False) -> dic
     names = NAMES if s_free else NAMES[:-1]
     true = TRUE[: len(names)]
     with tempfile.TemporaryDirectory() as tmp:
-        file = Path(tmp) / "b3.csv"
+        file = Path(tmp) / "data.csv"
         dataset(seed).to_csv(file, index=False)
         # started near the truth: each value off by about 20 % (log-normal), its own draw
         start = true * np.exp(0.2 * np.random.default_rng(10_000 + seed).normal(size=true.size))
@@ -210,7 +210,7 @@ def main():
     ap.add_argument("design", choices=sorted(OBSERVE))
     ap.add_argument("n", type=int)
     ap.add_argument("--s-free", action="store_true")
-    ap.add_argument("--options", default="starts=4 checks=quick")  # B3 has local optima
+    ap.add_argument("--options", default="starts=4 checks=quick")  # the model has local optima
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--out", default=None)
     ap.add_argument("--summary", action="store_true")
