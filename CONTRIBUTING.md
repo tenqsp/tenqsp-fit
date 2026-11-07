@@ -15,7 +15,6 @@ output of
 ```bash
 git clone https://github.com/tenqsp/tenqsp-fit
 cd tenqsp-fit
-python -m pip install "tenqsp @ git+https://github.com/tenqsp/tenqsp@main"
 python -m pip install -e ".[dev,plot,docs]"
 pytest -m "not slow"
 ```
@@ -23,7 +22,7 @@ pytest -m "not slow"
 ## Before you open a pull request
 
 ```bash
-ruff check src tests && ruff format --check src tests
+ruff check src tests validation && ruff format --check src tests validation
 pytest                       # all tests, about 35 minutes
 mkdocs build --strict        # if you changed the documentation
 ```

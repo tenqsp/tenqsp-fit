@@ -1,16 +1,22 @@
 # Install
 
-tenqsp-fit needs Python 3.12 or later and TenQSP. Until its first release it is installed from
-a clone of the repository:
+tenqsp-fit needs Python 3.12 or later. It installs TenQSP (0.7.0 or later) with it.
+
+```bash
+pip install tenqsp-fit                 # the library
+pip install "tenqsp-fit[plot]"         # with plots (matplotlib)
+```
+
+Keep the quotes (zsh, the default shell on macOS, reads the brackets otherwise).
+
+To work on tenqsp-fit itself, from a clone of the repository:
 
 ```bash
 git clone https://github.com/tenqsp/tenqsp-fit
 cd tenqsp-fit
 python -m pip install -e ".[dev,plot]"
-pytest -m "not slow"               # about 20 minutes
+pytest -m "not slow"                   # about 20 minutes
 ```
-
-The `pip install` line also installs TenQSP (0.7.0 or later) from PyPI.
 
 ## Check the installation
 

@@ -12,7 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Dongwoo Chae" }]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -33,6 +33,7 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/tenqsp/tenqsp-fit"
+Documentation = "https://tenqsp.github.io/tenqsp-fit/"
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.8"]
@@ -44,6 +45,13 @@ path = "src/tenqsp_fit/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tenqsp_fit"]
+
+[tool.hatch.build.targets.sdist]
+# what the source package holds, listed, so a build from a working copy takes nothing else
+only-include = ["src", "tests", "docs", "validation", "CHANGELOG.md", "CITATION.cff",
+                "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "mkdocs.yml"]
+exclude = ["docs/examples/theoph_run", "validation/*/results", "validation/*/*.log",
+           "__pycache__"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

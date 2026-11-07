@@ -1,5 +1,6 @@
 site_name: tenqsp-fit
 site_description: Fitting TenQSP models to data, with a diagnosis of what the data determine
+site_url: https://tenqsp.github.io/tenqsp-fit/
 repo_url: https://github.com/tenqsp/tenqsp-fit
 repo_name: tenqsp/tenqsp-fit
 edit_uri: ""

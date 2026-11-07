@@ -1,0 +1,49 @@
+name: Release
+
+# Publishing a GitHub release uploads the package to PyPI by trusted publishing (no stored
+# password): PyPI is told once that this repository's release.yml, in the "pypi" environment,
+# may publish tenqsp-fit. The release tag must match the version in src/tenqsp_fit/__init__.py.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check the tag matches the version
+        run: |
+          version=$(python -c "import re; print(re.search(r'__version__ = \"(.+)\"', open('src/tenqsp_fit/__init__.py').read())[1])")
+          test "v$version" = "${{ github.event.release.tag_name }}" || {
+            echo "tag ${{ github.event.release.tag_name }} does not match version $version"; exit 1; }
+      - name: Build
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tenqsp-fit
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

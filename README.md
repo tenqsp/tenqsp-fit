@@ -9,6 +9,12 @@ Version 0.1, the first release. It fits individual and population models by opti
 likelihoods); and gives predictions with their uncertainty and visual predictive checks.
 A fit is written as text after the TenQSP model, or built in Python.
 
+```bash
+pip install tenqsp-fit
+```
+
+Documentation: <https://tenqsp.github.io/tenqsp-fit/>
+
 ## Licence and credit
 
 tenqsp-fit is free and open source under the [Apache License 2.0](LICENSE). It was created by
