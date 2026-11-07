@@ -81,7 +81,7 @@ or in Python, `problem.options(starts=4, seed=1, rtol=1e-8)`. Every option and i
 | `timeout` | off | a time limit, as above |
 
 `method nuts` has its own options on the method line: `method nuts chains=4 warmup=1000
-samples=1000` (those are the defaults; see [NUTS](../methods/nuts.md)).
+samples=1000 target_accept=0.9` (those are the defaults; see [NUTS](../methods/nuts.md)).
 
 `problem.summary()` lists the options, written or default:
 

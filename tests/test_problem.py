@@ -136,7 +136,7 @@ error conc ~ combined(0.1, fix(0.2))
 censor conc below 0.05
 prior ke ~ gamma(mean=0.08, cv=0.5)
 
-method nuts chains=4 samples=500
+method nuts chains=4 samples=500 target_accept=0.95
 options rtol=1e-8 starts=8 seed=2
 """
     )
@@ -376,6 +376,9 @@ def test_method_must_suit(folder):
         p.check()
     with pytest.raises(TypeError, match="unknown option 'chain'. Did you mean 'chains'"):
         tf.Problem(tq.Model.from_text(PK)).method("nuts", chain=4)
+    for bad in (1.0, 0, "0.9", True):
+        with pytest.raises(ValueError, match="target_accept is a number between 0 and 1"):
+            tf.Problem(tq.Model.from_text(PK)).method("nuts", target_accept=bad)
     with pytest.raises(TypeError, match="Did you mean 'starts'"):
         tf.Problem(tq.Model.from_text(PK)).options(start=8)
 

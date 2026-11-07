@@ -18,9 +18,13 @@ gives NUTS the shape of the posterior: its inverse is the mass matrix, held thro
 the chains start one curvature-SD away from the fast fit in random directions. Without this,
 NUTS learns the shape during warmup, in windows too short for a dense matrix: on theophylline
 (CL and ke move together, 7 times narrower together than apart) it took 15 times more steps
-per draw. (3) Warmup tunes the step size (dual averaging, target acceptance 0.8). (4) The
-draws. All chains run as one batched (``jax.vmap``) computation, in chunks of ``CHUNK`` draws,
-between which the progress is shown and a stop (Ctrl-C) keeps the draws so far.
+per draw. (3) Warmup tunes the step size (dual averaging) to the acceptance rate
+``target_accept`` (0.9 by default: on theophylline it gave 3 divergences where 0.8 gave 18, and
+twice the effective sample size, for 10 % more time). (4) The draws. Each chain runs in its
+own thread, in chunks of ``CHUNK`` draws, between which the progress is shown and a stop
+(Ctrl-C, or the time limit) keeps the draws all chains have so far. (Batched with ``jax.vmap``
+instead, the chains shared one core and every step waited for the chain with the longest
+trajectory: 2.4 times slower on theophylline.)
 
 **Convergence**, per quantity and chain: rank-normalized split R-hat, bulk and tail
 effective sample sizes (ArviZ), divergences after warmup, energy BFMI per chain, and how often
@@ -30,7 +34,9 @@ a trajectory reached the maximum tree depth.
 from __future__ import annotations
 
 import math
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import jax
 import jax.numpy as jnp
@@ -38,14 +44,13 @@ import numpy as np
 import pandas as pd
 
 from .live import default_progress
-from .optimize import Result, scales, to_u, to_x
+from .optimize import Result, scales, to_u, to_x, watch
 from .priors import lkj_log_density, priors
-from .problem import seconds
+from .problem import METHOD_DEFAULTS, seconds
 
 __all__ = ["PosteriorResult", "fit_nuts"]
 
 CHUNK = 10  # draws per chain between two progress updates
-TARGET_ACCEPT = 0.8
 MAX_TREE_DEPTH = 10
 FD_HESS = 1e-4  # central differences of the gradient, for the curvature at the fast fit
 RHAT_MAX, ESS_MIN, BFMI_MIN = 1.01, 400, 0.3
@@ -159,11 +164,11 @@ def fit_nuts(problem, *, progress=None) -> PosteriorResult:
     from .laplace import Laplace, fit_laplace
     from .likelihood import Objective
     from .optimize import fit_optimize
-    from .problem import METHOD_DEFAULTS
 
     opts = problem._options
     mo = {**METHOD_DEFAULTS["nuts"], **problem._method.options}
     chains, warmup, samples = int(mo["chains"]), int(mo["warmup"]), int(mo["samples"])
+    target = float(mo["target_accept"])
     seed = int(opts.get("seed", 0))
     progress = progress or opts.get("progress") or default_progress()
     t_start = time.perf_counter()
@@ -200,52 +205,63 @@ def fit_nuts(problem, *, progress=None) -> PosteriorResult:
                 break
             inits[c] = flat0 + 0.5 ** (k + 1) * (Lm @ rng.normal(size=post.d))
 
-    # ---- 3-4. warmup and draws, all chains batched
+    # ---- 3-4. warmup and draws, each chain in its own thread
     init_kernel, sample_kernel = hmc(potential_fn=post.potential, algo="NUTS")
     keys = jax.random.split(jax.random.PRNGKey(seed), chains)
-    states = jax.vmap(
-        lambda key, z: init_kernel(
-            z, num_warmup=warmup, rng_key=key, dense_mass=True,
-            inverse_mass_matrix=jnp.asarray(Minv), adapt_mass_matrix=False, step_size=0.5,
-            target_accept_prob=TARGET_ACCEPT, max_tree_depth=MAX_TREE_DEPTH,
-        )
-    )(keys, jnp.asarray(inits))  # fmt: skip
 
     @jax.jit
-    def chunk(states):
+    def chunk(s):
         def body(s, _):
-            s = jax.vmap(sample_kernel)(s)
+            s = sample_kernel(s)
             return s, (s.z, s.diverging, s.num_steps, s.potential_energy, s.energy,
                        s.adapt_state.step_size)  # fmt: skip
 
-        return jax.lax.scan(body, states, None, length=CHUNK)
+        return jax.lax.scan(body, s, None, length=CHUNK)
 
     total = warmup + samples
-    rec = {k: [] for k in ("z", "div", "steps", "pe", "energy", "step")}
-    shown = _NutsProgress(progress, post.names, chains, warmup, total, problem.name)
-    done, status, stopped_by = 0, None, None
-    timeout = seconds(opts.get("timeout"))
-    try:
-        while done < total:
-            states, out = chunk(states)
-            for k, v in zip(rec, out, strict=True):
-                rec[k].append(np.asarray(v))
-            done += CHUNK
-            shown.update(rec, post, time.perf_counter() - t_start)
-            if done < total and timeout is not None and time.perf_counter() - t_start > timeout:
-                from .optimize import _duration
+    names = ("z", "div", "steps", "pe", "energy", "step")
+    per = [{k: [] for k in names} for _ in range(chains)]  # each chain's chunks so far
+    stop = threading.Event()
+    lock = threading.Lock()
 
-                status = "stopped"
-                stopped_by = f"the time limit (options timeout, {_duration(timeout)})"
-                break
-    except KeyboardInterrupt:
-        status, stopped_by = "stopped", "Ctrl-C"
+    def run(c):
+        s = init_kernel(jnp.asarray(inits[c]), num_warmup=warmup, rng_key=keys[c],
+                        dense_mass=True, inverse_mass_matrix=jnp.asarray(Minv),
+                        adapt_mass_matrix=False, step_size=0.5, target_accept_prob=target,
+                        max_tree_depth=MAX_TREE_DEPTH)  # fmt: skip
+        n = 0
+        while n < total and not (n and stop.is_set()):  # a stop keeps at least one chunk
+            s, out = chunk(s)
+            out = [np.asarray(v) for v in out]
+            with lock:
+                for k, v in zip(names, out, strict=True):
+                    per[c][k].append(v)
+            n += CHUNK
+
+    def together():
+        """The chunks every chain has finished, as (draws, chains, ...) pieces."""
+        with lock:
+            m = min(len(pc["z"]) for pc in per)
+            return {k: [np.stack([pc[k][i] for pc in per], axis=1) for i in range(m)]
+                    for k in names}  # fmt: skip
+
+    shown = _NutsProgress(progress, post.names, chains, warmup, total, problem.name)
+    timeout = seconds(opts.get("timeout"))
+    workers = ThreadPoolExecutor(max_workers=chains)
+    futures = [workers.submit(run, c) for c in range(chains)]
+    status, stopped_by = watch(
+        futures, stop, timeout, t_start,
+        lambda last=False, status=None: shown.update(together(), post,
+                                                     time.perf_counter() - t_start),
+    )  # fmt: skip
+    workers.shutdown()
+    rec = together()
     # (draws, chains, ...) -> (chains, draws, ...); the last chunk may overshoot
     arr = {k: np.swapaxes(np.concatenate(v), 0, 1)[:, :total] for k, v in rec.items() if v}
     shown.update(rec, post, time.perf_counter() - t_start, last=True, status=status)
     result = _result(problem, post, start, arr, chains, warmup, samples, status, notes,
                      time.perf_counter() - t_start, Minv)  # fmt: skip
-    result.stopped_by = stopped_by
+    result.stopped_by, result.target_accept = stopped_by, target
     return result
 
 
@@ -445,10 +461,13 @@ class PosteriorResult(Result):
             out.append(f"effective sample size below {ESS_MIN} for {', '.join(low.quantity)}: "
                        "the intervals are rough; run longer.")  # fmt: skip
         d = int(self.per_chain.divergences.sum())
+        ta = getattr(self, "target_accept", METHOD_DEFAULTS["nuts"]["target_accept"])
         if d:
             out.append(f"{d} divergent transition(s) after warmup: the sampler missed part of "
-                       "the posterior; the results may be biased (reparameterize, or give "
-                       "priors to quantities the data do not determine).")  # fmt: skip
+                       "the posterior; the results may be biased. Raise target_accept (now "
+                       f"{ta:g}; e.g. method nuts target_accept={0.95 if ta < 0.95 else 0.99:g}), "
+                       "reparameterize, or give priors to quantities the data do not "
+                       "determine.")  # fmt: skip
         b = self.per_chain.BFMI
         if (b < BFMI_MIN).any():
             out.append(f"energy BFMI below {BFMI_MIN} in chain(s) "

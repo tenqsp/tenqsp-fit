@@ -50,9 +50,10 @@ then give the posterior mode); the defaults by `nuts` only.
    start one curvature-SD away from the starting point in random directions. Starting with the
    right shape saves the sampler from learning it during warmup, which is slow when quantities
    are correlated.
-3. **Warmup**: the step size is tuned (dual averaging, target acceptance 0.8).
-4. **The draws**. All chains run as one batched computation. Ctrl-C (or `options timeout=`)
-   stops the run and keeps the draws so far.
+3. **Warmup**: the step size is tuned (dual averaging) so that a proposed step is accepted
+   at the rate `target_accept` (0.9 by default).
+4. **The draws**. Each chain runs in its own thread, so the chains use several cores. Ctrl-C
+   (or `options timeout=`) stops the run and keeps the draws every chain has so far.
 
 The maximum tree depth is 10.
 
@@ -67,7 +68,7 @@ when
 |---|---|
 | R-hat | above 1.01 |
 | effective sample size (bulk or tail) | below 400 |
-| divergent transitions after warmup | any |
+| divergent transitions after warmup | any (the first remedy: a higher `target_accept`, e.g. 0.95) |
 | energy BFMI | below 0.3 in a chain |
 | maximum tree depth reached | any |
 
@@ -87,18 +88,18 @@ method nuts chains=4 warmup=500 samples=500
 ```
 
 ```text
-decay: method nuts, sampled; 4 chains x 500 draws (after 500 warmup), 0 divergences, R-hat <= 1.005, ESS >= 662; 41 s
-started from optimize: -2LL -40.4211 (6 measurements); -2LL at the posterior medians -39.8713
+decay: method nuts, sampled; 4 chains x 500 draws (after 500 warmup), 0 divergences, R-hat <= 1.003, ESS >= 677; 30 s
+started from optimize: -2LL -40.4211 (6 measurements); -2LL at the posterior medians -39.9659
 
 quantity                   median        SD   95 % interval           R-hat    ESS  prior
-k                         0.49349   0.00914   (0.4761, 0.5136)        1.005    662  lognormal(median=0.5, sdlog=1)
-amount.additive          0.010495   0.00489   (0.005892, 0.02345)     1.003    874  lognormal(median=0.1, sdlog=2) (default)
+k                        0.49362   0.00871   (0.4775, 0.5112)       1.002    677  lognormal(median=0.5, sdlog=1)
+amount.additive         0.010264   0.00472   (0.005923, 0.02407)    1.003    829  lognormal(median=0.1, sdlog=2) (default)
 
 doctor: 4 notes
 note     convergence: R-hat, effective sample sizes, divergences, BFMI and tree depth: all within their limits.
 note     prior and data: the data narrowed every prior to less than 50 % of its width.
-note     tolerance check: at rtol 1e-08, -2 log posterior changes by at most 0.00034 over 20 draws; rtol 1e-06 is enough.
-note     gradient check: exact gradients agree with differences (at rtol 1e-08) to 0.014 % (3 directions).
+note     tolerance check: at rtol 1e-08, -2 log posterior changes by at most 0.00037 over 20 draws; rtol 1e-06 is enough.
+note     gradient check: exact gradients agree with differences (at rtol 1e-08) to 0.013 % (3 directions).
 ```
 
 The median of k agrees with the maximum-likelihood estimate (0.49354). The residual SD's
@@ -117,6 +118,7 @@ On the `method` line:
 | `chains` | 4 | the number of chains |
 | `warmup` | 1000 | warmup draws per chain (discarded) |
 | `samples` | 1000 | draws per chain kept |
+| `target_accept` | 0.9 | the acceptance rate warmup tunes the step size to, between 0 and 1. Higher means smaller steps: slower, with fewer divergent transitions |
 
 On the `options` line: `seed` (the chains' random numbers and starting points), `rtol`, `atol`,
 `timeout`, `progress`, `checks`; see [running a fit](../guide/running.md).
@@ -136,8 +138,8 @@ posterior itself gives each quantity's interval.
   several times (the mean steps per draw), and a population adds every unit's scores to what
   is sampled. One subject of the theophylline data (2 chains of 300 warmup and 250 draws)
   takes about a minute; the whole theophylline population (12 subjects, the defaults: 4
-  chains of 1000 warmup and 1000 draws) about 45 minutes, against under a minute for
-  `laplace`. A model of a structured population (a PDE) costs more
+  chains of 1000 warmup and 1000 draws, each chain on its own core) about 22 minutes, against
+  under a minute for `laplace`. A model of a structured population (a PDE) costs more
   per run and can take hours: try `optimize` or `laplace` first, and `nuts` when their
   answer is not enough.
 - The mass matrix is fixed from the curvature at the starting point; a posterior whose shape

@@ -40,10 +40,10 @@ _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 METHODS = {
     "optimize": ("one set of parameters: least squares or maximum likelihood", ()),
     "laplace": ("population, FOCE-I", ()),
-    "nuts": ("Bayesian, NUTS sampling", ("chains", "warmup", "samples")),
+    "nuts": ("Bayesian, NUTS sampling", ("chains", "warmup", "samples", "target_accept")),
 }
 # a method's options with their defaults (printed in the summary)
-METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000}}
+METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000, "target_accept": 0.9}}
 CONSTANTS = {"e": "exp(1)"}  # names users may expect (TenQSP knows pi, not e)
 # options with their defaults (printed in the summary; rule: no silent defaults)
 OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None,
@@ -595,7 +595,8 @@ class Problem:
     def method(self, name: str, **options) -> None:
         """How to fit: ``"optimize"`` (one set of parameters), ``"laplace"`` (parameters that
         vary between units; FOCE-I), ``"nuts"`` (Bayesian; options ``chains``, ``samples``,
-        ``warmup``)."""
+        ``warmup``, ``target_accept``: the acceptance rate warmup tunes the step size to, 0.9 by
+        default; higher means smaller steps, slower and with fewer divergences)."""
         if name not in METHODS:
             raise ValueError(
                 f"unknown method '{name}'.{nearest(name, METHODS)} Methods: {', '.join(METHODS)}."
@@ -605,7 +606,11 @@ class Problem:
             if k not in allowed:
                 more = f" Its options: {', '.join(allowed)}." if allowed else ""
                 raise TypeError(f"method {name}: unknown option '{k}'.{nearest(k, allowed)}{more}")
-            if not (isinstance(v, int) and not isinstance(v, bool) and v > 0):
+            if k == "target_accept":
+                if not (isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 1):
+                    raise ValueError(f"method {name}: target_accept is a number between 0 and 1 "
+                                     f"(e.g. 0.95), got {v!r}.")  # fmt: skip
+            elif not (isinstance(v, int) and not isinstance(v, bool) and v > 0):
                 raise ValueError(f"method {name}: {k} must be a positive whole number, got {v!r}.")
         if self._method is not None:
             raise ValueError(f"the method is given twice ({self._method.name} and {name}).")

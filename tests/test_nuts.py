@@ -8,6 +8,8 @@ mode by SciPy on closed forms (written priors with ``optimize`` and ``laplace``)
 independent NumPyro NUTS run on the closed-form one-compartment model with the same priors
 (the posterior ``method nuts`` gives)."""
 
+import copy
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -86,7 +88,7 @@ def test_default_priors_are_printed(tmp_path):
     assert "A.sd ~ lognormal(median=1, sdlog=2) (default)" in s
     assert "A.mean ~ normal(mean=8, sd=16) (default)" in s
     assert "corr(A, B) ~ LKJ(2) (default)" in s
-    assert "chains=2 warmup=1000 (default) samples=1000 (default)" in s
+    assert "chains=2 warmup=1000 (default) samples=1000 (default) target_accept=0.9 (default)" in s
 
 
 def test_a_start_of_0_needs_a_written_prior(tmp_path):
@@ -275,6 +277,15 @@ def test_the_nuts_result(sampled, tmp_path):
     np.testing.assert_allclose(r.corr.to_numpy(), r.draws[["ka", "CL", "ke"]].corr().to_numpy())
     text = repr(r)
     assert "4 chains x 250 draws (after 200 warmup)" in text and "prior" in text
+    # a divergence's advice names the acceptance target and a higher one
+    assert r.target_accept == 0.9
+    fake = copy.copy(r)
+    fake.per_chain = r.per_chain.assign(divergences=[1, 0, 0, 2])
+    w = [x for x in fake.warnings() if "divergent" in x][0]
+    assert w.startswith("3 divergent transition(s)")
+    assert "Raise target_accept (now 0.9; e.g. method nuts target_accept=0.95)" in w
+    fake.target_accept = 0.95
+    assert "target_accept=0.99" in [x for x in fake.warnings() if "divergent" in x][0]
     fig = r.plot_trace()
     assert len([a for a in fig.axes if a.get_visible()]) == 4
     with pytest.raises(ValueError, match="profile is for likelihood fits"):
@@ -284,6 +295,24 @@ def test_the_nuts_result(sampled, tmp_path):
     # the VPC takes each simulated study from a different draw: wider than at one value
     v = r.vpc(n=100, seed=1).table
     assert np.isfinite(v["sim p50"]).all()
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(900)
+def test_a_stopped_nuts_run_keeps_what_every_chain_has(tmp_path):
+    """The chains run in threads; a stop (here the time limit) keeps the draws all of them
+    have, at least one chunk each."""
+    from tenqsp_fit.nuts import CHUNK
+
+    p = problem(tmp_path, options="seed=2 timeout=0.001", extra=PRIORS_PK)
+    p._method = None
+    p.method("nuts", chains=3, warmup=500, samples=500, target_accept=0.85)
+    r = tf.fit(p)
+    assert r.status == "stopped" and r.stopped_by.startswith("the time limit")
+    assert r.target_accept == 0.85
+    assert sorted(set(r.trace.chain)) == [1, 2, 3]
+    n = r.trace.groupby("chain").size()
+    assert (n == n.iloc[0]).all() and n.iloc[0] >= CHUNK and n.iloc[0] % CHUNK == 0
 
 
 def test_fit_method_nuts_overrides(tmp_path):
