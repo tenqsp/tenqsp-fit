@@ -6,13 +6,11 @@ a clone of the repository:
 ```bash
 git clone https://github.com/tenqsp/tenqsp-fit
 cd tenqsp-fit
-python -m pip install "tenqsp @ git+https://github.com/tenqsp/tenqsp@main"
 python -m pip install -e ".[dev,plot]"
 pytest -m "not slow"               # about 20 minutes
 ```
 
-tenqsp-fit uses parts of TenQSP that come with TenQSP 0.7.0, so TenQSP is installed from its
-main branch until 0.7.0 is released.
+The `pip install` line also installs TenQSP (0.7.0 or later) from PyPI.
 
 ## Check the installation
 

@@ -239,8 +239,8 @@ data file theoph.csv SHA-256 6536b3614f8d34de4de407a7f28b26657038e1e0239c704d7e4
 columns: ID=Subject, TIME=Time, DV=conc
 rows: 132; measurements 132, linked 132; doses 12
 data as read SHA-256 a1d839ceef82514b7de1befce5e24e811ebcc9b2868a5dd238b68e2431a608f9
-versions: tenqsp_fit 0.1.0, tenqsp 0.6.1, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1, optimistix 0.1.0, numpyro 0.22.0, arviz_stats 1.3.3
-platform Linux x86_64; 40 s
+versions: tenqsp_fit 0.1.0, tenqsp 0.7.0, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1, optimistix 0.1.0, numpyro 0.22.0, arviz_stats 1.3.3
+platform Linux x86_64; 41 s
 all units run as one build of the model (TenQSP pads the shorter ones with slots at t = +inf; this changes the results by about the solver's tolerance)
 
 Each quantity
@@ -250,13 +250,14 @@ Each quantity
      ka.sdlog  0.656425 0.150018  0.419421   1.027354        yes
     CL.median  0.039544 0.002353  0.035190   0.044436        yes
      CL.sdlog  0.167511 0.036433  0.109372   0.256554        yes
-           ke  0.084964 0.004342  0.076865   0.093916        yes
+           ke  0.084964 0.004342  0.076865   0.093916        yes  closed
 conc.additive  0.707770 0.048153  0.619412   0.808733        yes
 
 Ridges and determined combinations
 ----------------------------------
 no ridge: no direction weaker than 1e-3 of the strongest
 condition number of the curvature 39.1; no ridge, every quantity determined within a factor 10.
+eigenvalues of the correlation matrix of the estimates: 0.449, 0.929, 0.973, 1, 1.06, 1.59 (largest over smallest 3.53)
 
 The doctor's findings
 ---------------------
@@ -270,7 +271,7 @@ gradient check: not for laplace (its gradient is itself a difference)
 
 Named predictions
 -----------------
-4 mg/kg q12h: conc from 0 to 48 (bolus 4 into depot at t = 0; bolus 4 into depot at t = 12; bolus 4 into depot at t = 24); approximate (from the standard errors), 200 draws; with a new unit's 90 % range
+4 mg/kg q12h: conc from 0 to 48 (bolus 4 into depot at t = 0; bolus 4 into depot at t = 12; bolus 4 into depot at t = 24); approximate (from the standard errors), 200 draws
 
 TenQSP's reports
 ----------------
