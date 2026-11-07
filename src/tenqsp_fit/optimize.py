@@ -198,6 +198,7 @@ FD_STEP = 1e-3  # central differences for the standard errors, on the estimation
 
 
 STOPPED_SE = "not computed: the fit was stopped before it converged"
+STOPPED_COV = "not computed: stopped (Ctrl-C) while computing them"
 
 
 NOT_ASKED = "not computed (not asked for)"
@@ -220,16 +221,24 @@ def covariance(value, u, sc, *, gradient=None) -> dict:
     p, h = len(u), FD_STEP
     E = np.eye(p) * h
     workers = ThreadPoolExecutor(max_workers=max(1, min(4 * p, os.cpu_count() or 1)))
+    try:
+        if gradient is not None:
+            G = list(workers.map(lambda d: np.asarray(gradient(u + d)), [*E, *(-E)]))
+        else:
+            points = [u]
+            for i in range(p):
+                points += [u + E[i], u - E[i]]
+                for j in range(i + 1, p):
+                    points += [u + E[i] + E[j], u + E[i] - E[j], u - E[i] + E[j],
+                               u - E[i] - E[j]]  # fmt: skip
+            v = list(workers.map(lambda w: float(value(w)), points))
+    except KeyboardInterrupt:  # the fit is kept, without standard errors
+        workers.shutdown(wait=False, cancel_futures=True)
+        print("Stopped (Ctrl-C) while computing the standard errors; the fit is kept without them.")
+        return no_covariance(p, STOPPED_COV)
     if gradient is not None:
-        G = list(workers.map(lambda d: np.asarray(gradient(u + d)), [*E, *(-E)]))
         H = np.array([(G[i] - G[p + i]) / (2 * h) for i in range(p)])
     else:
-        points = [u]
-        for i in range(p):
-            points += [u + E[i], u - E[i]]
-            for j in range(i + 1, p):
-                points += [u + E[i] + E[j], u + E[i] - E[j], u - E[i] + E[j], u - E[i] - E[j]]
-        v = list(workers.map(lambda w: float(value(w)), points))
         f0, H, k = v[0], np.zeros((p, p)), 1
         for i in range(p):
             H[i, i] = (v[k] - 2 * f0 + v[k + 1]) / h**2
@@ -326,6 +335,8 @@ class Result:
 
         ok = self.starts[np.isfinite(self.starts["-2LL"])]
         v = np.sort(ok["-2LL"].to_numpy())
+        if not len(v):
+            raise ValueError("plot_waterfall: no start ended with a finite -2LL (result.starts).")
         if ax is None:
             _, ax = plt.subplots(figsize=(5, 3.2))
         d = v - v[0]  # above the best; differences below 0.1 are one optimum
@@ -780,6 +791,12 @@ def watch(futures, stop, timeout, t_start, show) -> tuple[str | None, str | None
     stopped_by = None
     try:
         while not all(f.done() for f in futures):
+            failed = next((f for f in futures if f.done() and f.exception() is not None), None)
+            if failed is not None:  # stop the others, then raise what that start raised
+                stop.set()
+                for f in futures:
+                    f.exception()
+                failed.result()
             show()
             if timeout is not None and time.perf_counter() - t_start > timeout:
                 stopped_by = f"the time limit (options timeout, {_duration(timeout)})"

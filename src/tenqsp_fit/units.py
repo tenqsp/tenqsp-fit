@@ -250,6 +250,13 @@ def row_problems(df: pd.DataFrame, unit: str | None, add, origin, censored=None)
             )
     if "EVID" in cols:
         evid = pd.to_numeric(df["EVID"], errors="coerce")
+        no_evid = np.flatnonzero(df["EVID"].isna().to_numpy())
+        if len(no_evid):  # neither a measurement nor a dose: it would be dropped unseen
+            add(
+                origin,
+                f"EVID is missing on {rows_text(no_evid)}; give every row its EVID (0 a "
+                "measurement, 1 a dose, 2 neither).",
+            )
         bad = np.flatnonzero(~evid.isin([0, 1, 2, 3, 4]).to_numpy() & df["EVID"].notna())
         if len(bad):
             add(origin, f"EVID is 0, 1, 2, 3 or 4; {rows_text(bad)} {_have(bad)} other values.")
@@ -459,10 +466,9 @@ def _regimens(df, keys, order, plan, add, origin_of) -> dict:
 def _dose_time_problems(df, u: Unit, in_unit, time, plan, add, origin_of) -> None:
     """A measurement at the time of a dose into a compartment it reads directly: TenQSP gives
     the value just after the dose, NONMEM the value just before when the measurement row
-    comes first. Unambiguous only when the dose row comes first in the file."""
-    doses = [
-        (e["time"] if e["kind"] == "bolus" else e["start"], e["target"]) for e in events(u.scenario)
-    ]
+    comes first. Unambiguous only when the dose row comes first in the file. Only a bolus
+    jumps the value; at the start of an infusion before and after are the same."""
+    doses = [(e["time"], e["target"]) for e in events(u.scenario) if e["kind"] == "bolus"]
     if not doses:
         return
     dose_rows = np.flatnonzero(D.dose_rows(df) & in_unit) if plan.doses.column is None else []

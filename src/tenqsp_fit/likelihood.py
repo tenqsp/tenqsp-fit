@@ -21,7 +21,9 @@ with it; NONMEM's objective function value (OFV) leaves it out: OFV = -2LL - n l
 
 **Predictions near zero.** A population driven extinct, or solver round-off below
 ``atol`` (which can be slightly negative), would make ``log10(bact)`` NaN or minus infinity.
-Inside a transformed link the observables are taken through the smooth floor
+In a link whose formula needs its observables above 0 (a log, a root, logit, a power that
+is not a whole number of 0 or more, a division by them; ``needs_floor``) they are taken
+through the smooth floor
 ``(v + sqrt(v^2 + 4 eps^2))/2`` (``v`` for ``v >> eps``, ``eps`` at 0, above 0 and rising
 with ``v`` everywhere, so the residual stays finite and its gradient points back), with
 ``eps`` the solver's absolute tolerance: below it a prediction is round-off. The prediction
@@ -54,6 +56,31 @@ _LOG_2PI = math.log(2 * math.pi)
 
 def _floor(v, eps):
     return 0.5 * (v + jnp.sqrt(v * v + 4.0 * eps * eps))
+
+
+_NEEDS_POSITIVE = {"log", "log10", "log2", "sqrt", "logit"}
+
+
+def needs_floor(lhs: str) -> bool:
+    """Whether a link's formula needs its observables above 0: it takes a log, a root or a
+    logit of them, a power that is not a whole number of 0 or more, or divides by them. Other
+    formulas (``2*E``, ``conc*1e9``, ``E - E0``) read the observables as they are, negative
+    values included."""
+    import ast
+
+    tree = ast.parse(lhs.replace("^", "**"), mode="eval")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) in _NEEDS_POSITIVE:
+            return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            e = node.right
+            whole = isinstance(e, ast.Constant) and float(e.value).is_integer() and e.value >= 0
+            if not whole:
+                return True
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            if any(isinstance(n, ast.Name) for n in ast.walk(node.right)):
+                return True
+    return False
 
 
 class Objective:
@@ -208,7 +235,7 @@ class Objective:
         for lhs, _, _ in problem._plan().links:
             f = tq.formula(lhs)
             names = list(f.names)
-            transformed = "".join(lhs.split()) not in outputs
+            transformed = "".join(lhs.split()) not in outputs and needs_floor(lhs)
             n_max = max((len(u.observations[lhs].times) for u in units if lhs in u.observations),
                         default=0)  # fmt: skip
             idx = np.zeros((n_units, n_max), np.int64)

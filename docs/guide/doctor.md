@@ -46,14 +46,16 @@ The finding names the quantities that move along the ridge (those with a weight 
            what to do: measure what tells them apart, write a prior on some of them, or estimate the determined combination (a formula after fit).
   ```
 
-- more quantities: how they move together along the ridge, on their estimation scales. From
-  a bacteria-only fit stopped early:
-
-  ```text
-  problem  ridge: g, log10(bact).additive, k and beta are not determined apart: the fit does not change when log g, log log10(bact).additive, log k, log beta move together as +1.00 : -0.50 : -0.41 : -0.38 (curvature ratio 0.0e+00).
-  ```
+- more quantities: how they move together along the ridge, on their estimation scales, as
+  weights: "the fit does not change when log g, log k, log beta move together as
+  +1.00 : -0.41 : -0.38".
 
 Several flat directions that share quantities are one finding.
+
+A direction along which −2LL curves *downward* is not a ridge: there the fit is not at a
+minimum (it stopped at a saddle, or before the minimum). The doctor reports it as the problem
+**not at a minimum**, naming the quantities of that direction; refit from the estimates or
+with more starts.
 
 What to do: measure what tells the quantities apart (another output, another design), write a
 prior on one of them from other knowledge (see [estimates and distributions](estimates.md)), or
@@ -237,7 +239,7 @@ data file theoph.csv SHA-256 6536b3614f8d34de4de407a7f28b26657038e1e0239c704d7e4
 columns: ID=Subject, TIME=Time, DV=conc
 rows: 132; measurements 132, linked 132; doses 12
 data as read SHA-256 a1d839ceef82514b7de1befce5e24e811ebcc9b2868a5dd238b68e2431a608f9
-versions: tenqsp_fit 0.0.1, tenqsp 0.6.1, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1
+versions: tenqsp_fit 0.1.0, tenqsp 0.6.1, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1, optimistix 0.1.0, numpyro 0.22.0, arviz_stats 1.3.3
 platform Linux x86_64; 40 s
 all units run as one build of the model (TenQSP pads the shorter ones with slots at t = +inf; this changes the results by about the solver's tolerance)
 

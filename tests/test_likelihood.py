@@ -348,3 +348,23 @@ def test_written_likelihood_checks(data_file):
     with pytest.raises(tf.ProblemError, match="likelihood conc: 'sd' is not an estimated"):
         fit = "observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07\n"
         make(data_file, fit + "likelihood conc: -0.5*((DV - conc)/sd)^2").check()
+
+
+def test_only_links_that_need_it_floor_their_observables(data_file):
+    """A link's formula reads its observables as they are (negative values too), unless it
+    takes a log, a root, a logit, a power that is not a whole number of 0 or more, or
+    divides by them: then they are floored above 0 at atol."""
+    from tenqsp_fit.likelihood import needs_floor
+
+    for f, floor in (("log10(bact)", True), ("sqrt(c)", True), ("c^0.5", True),
+                     ("1/c", True), ("logit(p)", True), ("2*E", False), ("conc*1e9", False),
+                     ("E - E0", False), ("c^2", False), ("exp(c)", False)):  # fmt: skip
+        assert needs_floor(f) is floor, f
+    plain = tf.objective(make(data_file, "observe conc = DV\nestimate ka = 1.5, CL = 0.04, "
+                              "ke = 0.08\nerror conc ~ additive(0.2)"))  # fmt: skip
+    fit = "observe conc - 50 = DV\nestimate ka = 1.5, CL = 0.04, ke = 0.08\n"
+    shifted = tf.objective(make(data_file, fit + "error conc - 50 ~ additive(0.2)"))
+    f = np.asarray(plain.predictions(plain.x0)["conc"])
+    g = np.asarray(shifted.predictions(shifted.x0)["conc - 50"])
+    assert (g < 0).any()
+    np.testing.assert_allclose(g, f - 50, rtol=1e-12)

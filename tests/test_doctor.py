@@ -231,3 +231,20 @@ def test_a_fit_that_did_not_end_at_a_minimum():
     r = SimpleNamespace(hessian_u=-np.eye(2), covariance_status="failed: not positive definite",
                         names=["a", "b"], scales=[("log",)] * 2)  # fmt: skip
     assert [f.check for f in Dr._determination(r)] == ["standard errors", "not at a minimum"]
+
+
+def test_a_saddle_is_not_a_ridge():
+    """-2LL curving down along a direction: not at a minimum (a ridge is flat, not down)."""
+    r = SimpleNamespace(hessian_u=np.diag([4.0, -1.0]), names=["ka", "ke"],
+                        scales=[("log",), ("log",)], covariance_status="failed")  # fmt: skip
+    found = Dr._determination(r)
+    saddle = [f for f in found if f.check == "not at a minimum"]
+    assert len(saddle) == 1 and "ke" in saddle[0].message
+    assert not [f for f in found if f.check == "ridge"]
+
+
+def test_waterfall_without_a_finished_start():
+    r = tf.Result.__new__(tf.Result)
+    r.starts = pd.DataFrame({"-2LL": [np.nan]})
+    with pytest.raises(ValueError, match="no start ended with a finite -2LL"):
+        r.plot_waterfall()

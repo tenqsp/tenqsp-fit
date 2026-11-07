@@ -123,7 +123,7 @@ def passport(result) -> Passport:
     lines = [
         f"problem {p.name}: method {result.method} ({result.optimizer}), {result.status}",
         f"-2LL {result.m2ll:.4f} ({result.n_observations} measurements"
-        + (f", {result.objective.n} units" if result.method == "laplace" else "")
+        + (f", {result.objective.n} units" if getattr(result, "modes", None) is not None else "")
         + ")",
         f"options: {opts or 'none written'} (rtol {p._options.get('rtol', 1e-6):g} unless written)",
         f"problem text (model and fit) SHA-256 {run['hashes']['problem.tq']}",

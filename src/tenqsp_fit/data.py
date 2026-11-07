@@ -16,7 +16,8 @@ import pandas as pd
 from .errors import nearest
 
 # NONMEM's standard columns (the column map renames the data's own names to these)
-STANDARD = ("ID", "TIME", "DV", "AMT", "EVID", "MDV", "CMT", "DVID", "RATE", "II", "ADDL", "SS")
+STANDARD = ("ID", "TIME", "DV", "AMT", "EVID", "MDV", "CMT", "DVID", "RATE", "DUR", "II", "ADDL",
+            "SS")  # fmt: skip
 
 
 def read_table(source, base: Path | None = None) -> tuple[pd.DataFrame, str, str | None]:
@@ -41,9 +42,17 @@ def read_table(source, base: Path | None = None) -> tuple[pd.DataFrame, str, str
         raise ValueError(f"data: no file '{path}'.")
     raw = path.read_bytes()
     df = pd.read_csv(
-        io.BytesIO(raw), sep=None, engine="python", na_values=["."], skipinitialspace=True
-    )
+        io.BytesIO(raw), sep=None, engine="python", na_values=["."], skipinitialspace=True,
+        encoding="utf-8-sig",  # a file saved by Excel as "CSV UTF-8" starts with a BOM
+    )  # fmt: skip
     df.columns = [str(c).strip() for c in df.columns]
+    for c in df.columns:  # spaces after values (before them are dropped on reading)
+        if df[c].dtype == object or pd.api.types.is_string_dtype(df[c]):
+            col = df[c].map(lambda v: v.strip() if isinstance(v, str) else v).replace(".", np.nan)
+            try:
+                df[c] = pd.to_numeric(col)
+            except (ValueError, TypeError):
+                df[c] = col
     return df, hashlib.sha256(raw).hexdigest(), str(path.resolve())
 
 

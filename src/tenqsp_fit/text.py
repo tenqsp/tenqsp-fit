@@ -336,7 +336,10 @@ class _Reader:
                     raise _Problem(
                         f"cannot read '{item}'; write doses CMT 1 into depot, 2 into centr."
                     )
-                cmt[_number(kv.group(1), "doses: a CMT number")] = kv.group(2)
+                k = _number(kv.group(1), "doses: a CMT number")
+                if k in cmt:
+                    raise _Problem(f"CMT {kv.group(1)} is given twice.")
+                cmt[k] = kv.group(2)
             self.p.doses(cmt={int(k) if k.is_integer() else k: v for k, v in cmt.items()})
         elif m := re.fullmatch(rf"({_NAME})\s+at\s+t\s*=\s*(\S+)\s+into\s+({_NAME})", rest):
             self.p.doses(column=m.group(1), at=_number(m.group(2), "doses: at"), into=m.group(3))
@@ -345,6 +348,7 @@ class _Reader:
                 "write doses into depot, doses CMT 1 into depot, 2 into centr, or "
                 "doses Dose at t=0 into depot."
             )
+        self.p._doses.origin = st.origin
 
     def st_observe(self, rest: str, st: _Statement) -> None:
         body, where = _split_at(rest, _WHERE) or (rest, None)
@@ -449,6 +453,7 @@ class _Reader:
             raise _Problem("write method optimize, method laplace or method nuts.")
         name, *opts = rest.split(None, 1)
         self.p.method(name, **_options(opts[0] if opts else ""))
+        self.p._method.origin = st.origin
 
     def st_options(self, rest: str, st: _Statement) -> None:
         self.p.options(**_options(rest))
@@ -463,6 +468,8 @@ def _options(text: str) -> dict:
         if not kv:
             raise _Problem(f"cannot read '{item}'; write options as key=value, e.g. starts=8.")
         k, v = kv.groups()
+        if k in out:
+            raise _Problem(f"{k} is given twice.")
         if re.fullmatch(r"[+-]?\d+", v):
             out[k] = int(v)
         elif re.fullmatch(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", v):
@@ -530,4 +537,9 @@ def load(path: str | Path, *, model=None) -> Problem:
     if isinstance(model, str | Path):
         mp = Path(model)
         model = tq.load(mp if mp.is_absolute() or mp.exists() else p.parent / mp)
-    return read(p.read_text(encoding="utf-8"), model=model, name=p.stem, base=p.parent)
+    # the file's name names the problem when its fit line has none ("theoph-pop v2" ->
+    # theoph_pop_v2)
+    name = re.sub(r"\W+", "_", p.stem).strip("_") or "fit"
+    if name[0].isdigit():
+        name = "fit_" + name
+    return read(p.read_text(encoding="utf-8"), model=model, name=name, base=p.parent)

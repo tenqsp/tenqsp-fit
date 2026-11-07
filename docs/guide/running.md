@@ -74,7 +74,7 @@ or in Python, `problem.options(starts=4, seed=1, rtol=1e-8)`. Every option and i
 | `starts` | 1 | how many starts: start 1 is the values written, the others are drawn around them |
 | `seed` | 0 | the random draws: the starts, the doctor's gradient check, NUTS's chains. The same seed, the same draws |
 | `rtol` | 1e-6 | the solver's relative tolerance |
-| `atol` | TenQSP's (1e-6) | the solver's absolute tolerance; also the level below which predictions in a transformed link (`log10(bact)`) are floored |
+| `atol` | TenQSP's (1e-6) | the solver's absolute tolerance; also the level below which predictions in a link that takes a log, a root or a power (`log10(bact)`) are floored |
 | `maxiter` | 200 | the most steps of each start's optimizer (and of each profile point's refit) |
 | `progress` | `plot` in a notebook, `text` elsewhere | see above |
 | `checks` | `full` | `quick` leaves out the doctor's tolerance and gradient checks |

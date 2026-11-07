@@ -167,7 +167,24 @@ def _make(name: str, kwargs: dict, *, formulas: bool = True) -> Distribution:
             v = num = _as_float(v, f"{name}: '{k}'")
         _check(name, k, num)
         args.append((k, v))
+    _check_together(name, {k: (v.value if isinstance(v, Fixed) else v) for k, v in args})
     return Distribution(name, tuple(args))
+
+
+def _check_together(name: str, a: dict) -> None:
+    """Arguments that are each valid but not together (formulas are not checked)."""
+    num = {k: v for k, v in a.items() if isinstance(v, int | float)}
+    if name == "normal" and "cv" in num and num.get("mean") == 0 and num["cv"] != 0:
+        raise ValueError("normal: a cv of a mean of 0 is an sd of 0; give normal(mean=0, sd=...).")
+    if name == "beta" and "mean" in num and ("sd" in num or "var" in num):
+        m = num["mean"]
+        var = num["sd"] ** 2 if "sd" in num else num["var"]
+        if not var < m * (1 - m):
+            raise ValueError(
+                f"beta: with mean {_num(m)} the variance must be below mean*(1 - mean) = "
+                f"{_num(m * (1 - m))} (an sd below {_num(math.sqrt(m * (1 - m)))}); got "
+                f"{_num(var)}."
+            )
 
 
 def _formula_text(v, what: str) -> str:
@@ -184,7 +201,7 @@ def _check(name: str, key: str, v: float) -> None:
         return  # does not vary
     if key in _POSITIVE and not v > 0:
         raise ValueError(f"{name}: '{key}' must be > 0 (got {_num(v)}).")
-    if name in ("lognormal", "exponential") and key in ("mean", "median") and not v > 0:
+    if name in ("lognormal", "exponential", "gamma") and key in ("mean", "median") and not v > 0:
         raise ValueError(f"{name}: '{key}' must be > 0 (got {_num(v)}).")
     if name in ("logitnormal", "beta") and key in ("median", "mean") and not 0 < v < 1:
         raise ValueError(f"{name}: '{key}' must be between 0 and 1 (got {_num(v)}).")

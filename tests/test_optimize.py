@@ -200,6 +200,14 @@ def test_ctrl_c_keeps_the_work(tmp_path, monkeypatch):
     assert "standard errors not computed: the fit was stopped" in repr(r)
 
 
+def test_ctrl_c_during_the_standard_errors_keeps_the_fit():
+    def gradient(u):
+        raise KeyboardInterrupt
+
+    cov = O.covariance(None, np.zeros(2), None, gradient=gradient)
+    assert cov["covariance_status"] == O.STOPPED_COV and np.isnan(cov["se"]).all()
+
+
 def test_a_time_limit_stops_the_fit_and_keeps_the_work(tmp_path):
     """options timeout: when the time is up the starts stop after their step, as for Ctrl-C,
     and the doctor says why."""

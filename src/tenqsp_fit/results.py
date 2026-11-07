@@ -27,6 +27,7 @@ import json
 import math
 import platform
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -399,8 +400,9 @@ def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95)
             if o is not None:
                 times[i, : len(o.times)] = o.times
                 if censored_link and o.below is not None:
-                    lim = np.asarray(o.below, float)
-                    y[:, i, : len(lim)] = np.maximum(y[:, i, : len(lim)], lim)
+                    lim = np.asarray(o.below, float)  # NaN where a row has no limit
+                    part = y[:, i, : len(lim)]
+                    y[:, i, : len(lim)] = np.where(np.isfinite(lim), np.maximum(part, lim), part)
         t, v = times[valid], obs_v[valid]
         ys = y[:, valid]  # (n, measurements)
         which, nb = _bins(t, bins)
@@ -526,6 +528,9 @@ class Profile:
     With priors written (``prior`` lines), the fit minimized -2LL plus the priors' terms, so
     the profile does too: its "-2LL" column and ``m2ll`` are that quantity (``objective``
     says so), a profile of the posterior mode.
+
+    Ctrl-C stops a profile: each side ends after the point it is computing, and the profile
+    is made of the points so far (``stopped_by`` is "Ctrl-C"; an end not reached is NaN).
     """
 
     name: str
@@ -540,6 +545,7 @@ class Profile:
     scanned: tuple = (float("nan"), float("nan"))
     better: dict | None = None
     objective: str = "-2LL"
+    stopped_by: str | None = None
 
     def plot(self, ax=None):
         plt = _pyplot()
@@ -585,9 +591,10 @@ class Profile:
             better = (f"; a better fit than the estimate at {self.name} = "
                       f"{self.better['value']:.4g} ({self.objective} lower by "
                       f"{self.m2ll - self.better['-2LL']:.3g})")  # fmt: skip
+        stopped = f"; stopped by {self.stopped_by}" if self.stopped_by else ""
         return (f"<Profile of {self.name}: estimate {self.estimate:.4g}, {self.level:.0%} "
                 f"{self._set_text()}, {len(self.table)} points; cut-off {self.cut:.3g} "
-                f"({self.rule}){better}>")  # fmt: skip
+                f"({self.rule}){better}{stopped}>")  # fmt: skip
 
 
 def _cut(level: float, result=None) -> tuple[float, str]:
@@ -620,6 +627,10 @@ def _copy(problem):
     for attr in ("_params", "_correlations", "_errors", "_defines", "_options"):
         setattr(p, attr, copy.copy(getattr(problem, attr)))
     return p
+
+
+class _Stopped(Exception):
+    """A profile stopped by Ctrl-C (raised in its threads before the next point)."""
 
 
 def profile(result, name: str, *, points: int = 8, step: float | None = None,
@@ -661,8 +672,14 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     objective = "-2LL" if with_priors is None else "-2LL plus the priors' terms"
     quiet = result.problem._options.get("progress") == "none"
     t0 = time.perf_counter()
-    fit = held_fitter(result, j)
-    fit(u_hat, u_best)  # compiles, at the estimate (a step or two), before the sides share it
+    held = held_fitter(result, j)
+    held(u_hat, u_best)  # compiles, at the estimate (a step or two), before the sides share it
+    stop = threading.Event()  # Ctrl-C: each side ends after the point it is computing
+
+    def fit(*args):
+        if stop.is_set():
+            raise _Stopped
+        return held(*args)
 
     def row(u, m2ll, status):
         x = np.asarray(to_x(jnp.asarray(u), sc))
@@ -675,8 +692,17 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
                   f"from the best ({'below' if sign < 0 else 'above'} the estimate, {what}; "
                   f"{time.perf_counter() - t0:.0f} s)", flush=True)  # fmt: skip
 
+    kept = {-1: [], 1: []}  # every point computed, also when stopped
+
     def side(sign):
-        out, start, warm, u_end = [], u_best, None, u_hat
+        try:
+            _side(sign, kept[sign])
+        except _Stopped:
+            pass
+        return kept[sign]
+
+    def _side(sign, out):
+        start, warm, u_end = u_best, None, u_hat
         for k in range(1, points + 1):
             u_end = u_hat + sign * k * step
             u, m2ll, status, warm = fit(u_end, start, warm)
@@ -688,8 +714,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
             if not np.isfinite(m2ll) or m2ll - ref > cut:
                 break
         if scan:
-            out += scanned(sign, u_end, start, out[-1]["-2LL"] if out else np.nan)
-        return out
+            scanned(sign, u_end, start, out[-1]["-2LL"] if out else np.nan, out)
 
     others = _other_ends(result, sc, u_best)
     lo_u, hi_u = _scan_range(result, j, sc, u_hat, step, scan_range)
@@ -702,11 +727,11 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
                 best = (u, m2ll, status)
         return best
 
-    def scanned(sign, u_from, start, f_from):
+    def scanned(sign, u_from, start, f_from, out):
+        """Adds the scan's points to ``out``."""
         far = hi_u if sign > 0 else lo_u
         if not np.isfinite(far) or (far - u_from) * sign <= 0:
-            return []
-        out = []
+            return
 
         def at(h, starts, what="refining"):
             got = best_of(h, starts)
@@ -737,10 +762,30 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
             elif np.isfinite(f[i]) and np.isfinite(f[i - 1]) and inside(f[i]) != inside(f[i - 1]):
                 ins, outs = (b, a) if inside(f[i]) else (a, b)
                 _halve(at, ins[0], ins[1], outs[0], inside, others)
-        return out
 
-    with ThreadPoolExecutor(2) as pool:
-        lo_side, hi_side = pool.map(side, (-1, 1))
+    pool = ThreadPoolExecutor(2)
+    futures = [pool.submit(side, sign) for sign in (-1, 1)]
+    stopped_by = None
+    try:  # waits here, so that Ctrl-C (or an error on either side) is seen at once
+        while not all(f.done() for f in futures):
+            time.sleep(0.1)
+            for f in futures:
+                if f.done() and f.exception() is not None:
+                    f.result()
+        lo_side, hi_side = (f.result() for f in futures)
+    except KeyboardInterrupt:
+        stop.set()
+        stopped_by = "Ctrl-C"
+        print(f"   profile {name}: stopped (Ctrl-C); ending after the points under way, keeping "
+              "the points so far.", flush=True)  # fmt: skip
+        for f in futures:
+            f.exception()
+        lo_side, hi_side = kept[-1], kept[1]
+    except BaseException:
+        stop.set()  # the other side ends after its point; then the error is raised
+        pool.shutdown()
+        raise
+    pool.shutdown()
     centre = {"value": float(result.x[j]), "-2LL": ref, "status": "estimate",
               **result.estimates}  # fmt: skip
     table = pd.DataFrame([*lo_side, centre, *hi_side]).sort_values("value", kind="stable")
@@ -762,7 +807,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     p = Profile(name=name, estimate=float(result.x[j]), m2ll=ref, table=table,
                 interval=interval, level=level, cut=cut, rule=rule, pieces=pieces,
                 scanned=(x_at(lo_u), x_at(hi_u)) if scan else (float("nan"),) * 2,
-                better=better, objective=objective)  # fmt: skip
+                better=better, objective=objective, stopped_by=stopped_by)  # fmt: skip
     p.seconds = time.perf_counter() - t0
     return p
 
@@ -907,12 +952,13 @@ def run_record(result, text: str | None = None, data_bytes: bytes | None = None)
     versions = {"tenqsp_fit": __version__, "tenqsp": tq.__version__, "jax": jax.__version__,
                 "numpy": np.__version__, "pandas": pd.__version__,
                 "python": platform.python_version()}  # fmt: skip
-    try:
-        import scipy
+    from importlib.metadata import PackageNotFoundError, version
 
-        versions["scipy"] = scipy.__version__
-    except ImportError:  # pragma: no cover
-        pass
+    for dist in ("scipy", "optimistix", "numpyro", "arviz-stats"):  # the optimizers, NUTS
+        try:
+            versions[dist.replace("-", "_")] = version(dist)
+        except PackageNotFoundError:  # pragma: no cover
+            pass
     return {
         "problem": p.name,
         "method": result.method,

@@ -359,6 +359,8 @@ class Problem:
             if not _NAME.fullmatch(str(column)):
                 raise ValueError(f"doses: '{column}' is not a column name.")
             at = _as_float(at, "doses: at")
+            if at < 0:
+                raise ValueError(f"doses: at is 0 or later (the model starts at 0), got {at:g}.")
         self._doses = _Doses(into=into, column=column, at=at)
 
     def _dose_place(self, place) -> None:
@@ -622,7 +624,9 @@ class Problem:
         the doctor leaves out its tolerance and gradient checks), ``timeout`` (a time limit:
         seconds, or text such as "90s", "30min", "2h"; off by default. When it is reached the
         fit stops after the step each start is taking, as Ctrl-C does, and returns what it
-        has, marked "stopped")."""
+        has, marked "stopped"; ``timeout=None``: no limit, as when it is left out)."""
+        if "timeout" in options and options["timeout"] is None:
+            options = {k: v for k, v in options.items() if k != "timeout"}
         for k, v in options.items():
             if k not in OPTIONS:
                 raise TypeError(
@@ -777,6 +781,25 @@ class Problem:
                     f"error {e.lhs}: {e.lhs} is not linked to the data; add observe {e.lhs} = DV.",
                 )
         for c in self._censors:
+            x = linked.get(_key(c.lhs))
+            if (
+                isinstance(c.below, str)
+                and df is not None
+                and c.below in columns
+                and (x is not None and x.column in columns)
+            ):
+                try:
+                    cens = self._rows_of(x, df) & U.censored_rows(df, x.column, c.below, c.where)
+                except ValueError:
+                    cens = np.zeros(len(df), bool)  # reported below
+                lim = pd.to_numeric(df[c.below], errors="coerce").to_numpy(float)
+                bad = np.flatnonzero(cens & ~np.isfinite(lim))
+                if len(bad):
+                    add(
+                        c,
+                        f"censor {c.lhs}: {c.below} is missing (or not a number) on censored "
+                        f"{U.rows_text(bad)}; each censored measurement needs its limit.",
+                    )
             if _key(c.lhs) not in linked:
                 add(c, f"censor {c.lhs}: {c.lhs} is not linked to the data.")
             elif isinstance(c.below, str) and df is not None and c.below not in columns:
@@ -1024,10 +1047,17 @@ class Problem:
         return tuple(o for o in self._m.observables if o in names)
 
     # ------------------------------------------------------------------ the data as read
+    def _need_data(self) -> None:
+        """What reads the data (units, table, provenance, a fit) needs a data line; the
+        summary and the text do not."""
+        if self._data is None:
+            raise ProblemError(['no data; add: data "file.csv"'])
+
     def units(self) -> tuple[U.Unit, ...]:
         """The data as the fit reads them: one ``tf.Unit`` per unit, in the order they first
         appear, each with a TenQSP scenario (its doses and the times of its measurements),
         its observations by link and its covariates. Checks the problem first."""
+        self._need_data()
         self.check()
         problems: list[str] = []
         units = self._build(lambda decl, msg: problems.append(msg))
@@ -1106,6 +1136,7 @@ class Problem:
         left out (with the conditions), the units, and the model and package versions."""
         from . import __version__
 
+        self._need_data()
         self.check()
         d, df = self._data, self._data.table
         obs, dose = D.observation_rows(df), D.dose_rows(df)
@@ -1515,7 +1546,10 @@ class Problem:
                     "not written here"
                 )
             else:
-                cols = ", ".join(f"{k}={v}" for k, v in self._data.columns.items())
+                cols = ", ".join(
+                    f"{k}={v}" if re.fullmatch(r"\S+", v) and '"' not in v else f'{k}="{v}"'
+                    for k, v in self._data.columns.items()
+                )
                 lines.append(f'data "{self._data.source}"' + (f" with {cols}" if cols else ""))
         if self._unit is not None:
             lines.append(f"unit {self._unit}")

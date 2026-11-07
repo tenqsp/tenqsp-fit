@@ -454,6 +454,20 @@ method laplace
     assert "line 14:" in msg and "Did you mean 'additive'" in msg
 
 
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        ("doses CMT 1 into depot, 1 into centr", "CMT 1 is given twice"),
+        ("options starts=2 starts=5", "starts is given twice"),
+        ("method nuts chains=2 chains=8", "chains is given twice"),
+    ],
+)
+def test_a_key_given_twice_on_one_line_is_refused(line, message):
+    text = PK + "fit twice\n" + line + "\n"
+    with pytest.raises(tf.FitTextError, match=message):
+        tf.Problem.from_text(text)
+
+
 def test_check_errors_name_their_lines(folder, monkeypatch):
     monkeypatch.chdir(folder)
     text = PK + FIT.replace("correlate ka, CL", "correlate ka, ke")
@@ -540,3 +554,45 @@ def test_spread_zero_needs_a_number(folder):
         tf.weibull(shape=0, scale=1)  # no spread to set to 0: it always varies
     with pytest.raises(ValueError, match="'sd' must be > 0"):
         p.prior("ke", tf.normal(mean=0.08, sd=0))  # a prior needs a spread
+
+
+def test_impossible_priors_are_refused():
+    with pytest.raises(ValueError, match="variance must be below mean"):
+        tf.beta(mean=0.5, sd=0.6)
+    with pytest.raises(ValueError, match="'mean' must be > 0"):
+        tf.gamma(mean=-1, sd=1)
+    with pytest.raises(ValueError, match="a cv of a mean of 0 is an sd of 0"):
+        tf.normal(mean=0, cv=0.5)
+    assert str(tf.beta(mean=0.5, sd=0.2)) == "beta(mean=0.5, sd=0.2)"
+
+
+def test_doses_and_method_problems_name_their_lines(folder, monkeypatch):
+    monkeypatch.chdir(folder)
+    text = PK + FIT.replace("doses into depot", "doses Dose at t=0 into depot")
+    with pytest.raises(tf.ProblemError, match=r"line 10: doses Dose at t=0 into depot"):
+        tf.Problem.from_text(text).check()
+    with pytest.raises(tf.ProblemError, match=r"line 19: method optimize\nmethod optimize fits"):
+        tf.Problem.from_text(PK + FIT.replace("method laplace", "method optimize")).check()
+
+
+def test_text_round_trips_column_maps_and_no_time_limit(tmp_path):
+    df = pd.DataFrame({"Subject": [1, 1], "Time (h)": [0.0, 1.0], "conc mg/L": [np.nan, 1.0],
+                       "AMT": [5, 0]})  # fmt: skip
+    df.to_csv(tmp_path / "sp.csv", index=False)
+    p = tf.Problem(tq.Model.from_text(PK), name="x")
+    p.data(str(tmp_path / "sp.csv"), ID="Subject", TIME="Time (h)", DV="conc mg/L")
+    p.options(timeout=None)  # no limit, as when it is left out
+    assert 'TIME="Time (h)", DV="conc mg/L"' in p.to_text()
+    q = tf.Problem.from_text(p.to_text(), model=tq.Model.from_text(PK))
+    assert q._data.columns == p._data.columns and "timeout" not in q._options
+
+
+def test_a_dose_column_time_below_0_is_refused():
+    p = tf.Problem(tq.Model.from_text(PK))
+    with pytest.raises(ValueError, match="at is 0 or later"):
+        p.doses(column="Dose", at=-1, into="depot")
+
+
+def test_load_names_a_problem_from_any_file_name(folder):
+    (folder / "pk-pop v2.tq").write_text(PK + FIT.replace("fit pk_pop", "fit"))
+    assert tf.load(folder / "pk-pop v2.tq").name == "pk_pop_v2"

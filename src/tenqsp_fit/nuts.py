@@ -314,13 +314,16 @@ class _NutsProgress:
 def _diagnostics(X, arr, warmup):
     from arviz_stats import bfmi, ess, rhat
 
+    def _halves(a):  # one chain: R-hat of its two halves (arviz gives NaN for one chain)
+        return a[:, : 2 * (a.shape[1] // 2)].reshape(2, -1)
+
     post = X[:, warmup:]  # (chains, draws, p)
     rows = []
     for i in range(X.shape[2]):
         a = post[:, :, i]
         ok = a.shape[1] >= 4
         rows.append(dict(
-            rhat=float(rhat(a)) if ok and a.shape[0] > 1 else math.nan,
+            rhat=float(rhat(a if a.shape[0] > 1 else _halves(a))) if ok else math.nan,
             ess_bulk=float(ess(a)) if ok else math.nan,
             ess_tail=float(ess(a, method="tail", prob=(0.05, 0.95))) if ok else math.nan,
         ))  # fmt: skip

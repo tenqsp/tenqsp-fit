@@ -218,11 +218,22 @@ def _determination(result) -> list[Finding]:
         )]  # fmt: skip
     in_ridge: set[str] = set()
     flat = []  # (ratio, direction, its quantities)
-    if top > 0:
-        for k in range(len(w)):
-            ratio = math.sqrt(max(w[k], 0.0) / top)
-            if ratio < RIDGE:
-                flat.append((ratio, V[:, k], _combination(V[:, k], names, sc)[1]))
+    for k in range(len(w)):
+        if w[k] < -(RIDGE**2) * top:  # curves down, beyond round-off: not a ridge
+            who = sorted(_combination(V[:, k], names, sc)[1], key=names.index)
+            out.append(Finding(
+                "not at a minimum", "problem",
+                f"-2LL curves downward at the estimates along a direction of {_and_names(who)}: "
+                "the fit stopped at a saddle or before the minimum, not at a minimum.",
+                "refit from the estimates (or with more starts) and check the trace "
+                "(result.plot_trace()).",
+                {"quantities": who, "direction": dict(zip(names, map(float, V[:, k]),
+                                                          strict=True))},
+            ))  # fmt: skip
+            continue
+        ratio = math.sqrt(max(w[k], 0.0) / top)
+        if ratio < RIDGE:
+            flat.append((ratio, V[:, k], _combination(V[:, k], names, sc)[1]))
     for group in _groups(flat):
         who = sorted({n for _, _, q in group for n in q}, key=names.index)
         in_ridge.update(who)

@@ -8,6 +8,7 @@ import json
 
 import matplotlib
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.optimize import least_squares
 from test_laplace import TIMES as LIN_TIMES
@@ -90,6 +91,22 @@ def test_vpc(pooled):
     assert len(v.figure.axes) == 1
 
 
+def test_vpc_with_a_limit_only_on_censored_rows(tmp_path):
+    """LLOQ filled only on the BLQ rows (as in many NONMEM files): the simulated values are
+    floored only where a row has a limit, so the bands of the other bins are numbers."""
+    df = pd.DataFrame(dict(TIME=[0.5, 1, 2, 4, 6, 8], DV=[0.78, 0.61, 0.37, 0.14, 0.05, 0.02],
+                           LLOQ=[np.nan] * 4 + [0.1, 0.1], BLQ=[0, 0, 0, 0, 1, 1]))  # fmt: skip
+    df.to_csv(tmp_path / "decay.csv", index=False)
+    p = tf.Problem.from_text(
+        "model decay\nparam k = 0.5\nd_t(A) = -k*A\nA(0) = 1\nobservable amount = A\n"
+        f'fit decay\ndata "{tmp_path / "decay.csv"}"\nobserve amount = DV\n'
+        "censor amount where BLQ == 1 below LLOQ\nestimate k = 0.3\n"
+        "error amount ~ additive(0.05)\nmethod optimize\noptions progress=none checks=quick\n"
+    )
+    t = tf.fit(p).vpc(n=50, seed=1).table
+    assert np.isfinite(t[["sim p5", "sim p50", "sim p95"]].to_numpy()).all()
+
+
 def test_vpc_population_draws_new_units(population):
     v = population.vpc(n=200, seed=1)
     t = v.table
@@ -148,6 +165,28 @@ def test_profile_with_priors_is_of_what_the_fit_minimized(tmp_path):
     lo, hi = pr.interval
     assert lo < r.estimates["ke"] < hi
     assert not [f for f in r.doctor().findings if f.check == "better fit in the profile"]
+
+
+def test_ctrl_c_stops_a_profile_and_keeps_its_points(pooled, monkeypatch):
+    import tenqsp_fit.held as H
+
+    real = H.held_fitter
+
+    def fitter(result, j):
+        fit, calls = real(result, j), {"n": 0}
+
+        def interrupted(*args):
+            calls["n"] += 1
+            if calls["n"] == 4:  # the compile at the estimate, then a point on each side
+                raise KeyboardInterrupt
+            return fit(*args)
+
+        return interrupted
+
+    monkeypatch.setattr(H, "held_fitter", fitter)
+    pr = pooled.profile("ke")
+    assert pr.stopped_by == "Ctrl-C" and "stopped by Ctrl-C" in repr(pr)
+    assert 2 <= len(pr.table) < 8  # the estimate and the points computed before the stop
 
 
 def test_profile_scan_finds_the_flip_flop_optimum(tmp_path):
@@ -254,3 +293,12 @@ def test_plot_data_before_fitting(tmp_path):
     assert len(ax.lines) == 3 + 1  # three units, the dose ticks
     np.testing.assert_allclose(ax.lines[0].get_ydata(), table().query("ID == 1").DV)
     plt.close(fig)
+
+
+def test_the_run_record_has_the_versions_of_the_optimizers_and_nuts(pooled):
+    from tenqsp_fit.results import run_record
+
+    versions = run_record(pooled)["versions"]
+    assert {"tenqsp_fit", "tenqsp", "jax", "scipy", "optimistix", "numpyro",
+            "arviz_stats"} <= set(versions)  # fmt: skip
+    assert versions["tenqsp_fit"] == tf.__version__

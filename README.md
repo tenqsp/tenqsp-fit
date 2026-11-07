@@ -3,10 +3,11 @@
 **Fitting [TenQSP](https://github.com/tenqsp/tenqsp) models to data, with a diagnosis of what
 the data can and cannot determine.**
 
-Status: early development, not yet released. The plan is in the project's requirements
-document; the first release will fit individual and population models by optimization and
-NUTS, report parameter ridges and identifiability, and give predictions with their
-uncertainty.
+Version 0.1, the first release. It fits individual and population models by optimization
+(`method optimize`), the Laplace approximation (`method laplace`, FOCE-I) and NUTS
+(`method nuts`); reports ridges and what the data cannot determine (the doctor, profile
+likelihoods); and gives predictions with their uncertainty and visual predictive checks.
+A fit is written as text after the TenQSP model, or built in Python.
 
 ## Licence and credit
 

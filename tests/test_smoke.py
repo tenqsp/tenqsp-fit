@@ -4,4 +4,4 @@ import tenqsp_fit
 
 
 def test_imports():
-    assert tenqsp_fit.__version__ == "0.0.1"
+    assert tenqsp_fit.__version__ == "0.1.0"

@@ -322,3 +322,44 @@ def test_ignore_lines_leave_their_rows_out():
         np.testing.assert_array_equal(p.units()[0].observations["conc"].values, [1, 2])
         assert "conc <- " + column + " (all rows)   2 rows" in p.summary()
         assert p.provenance()["rows"]["linked"] == 2
+
+
+def test_a_missing_evid_a_missing_limit_and_no_data_are_reported():
+    df = nonmem(n=1)
+    df.loc[2, "EVID"] = np.nan
+    with pytest.raises(tf.ProblemError, match=r"EVID is missing on row 3"):
+        problem(df).check()
+    df = nonmem(n=1).assign(LLOQ=np.nan, BLQ=0)
+    df.loc[4, ["BLQ", "LLOQ"]] = [1, np.nan]
+    p = problem(df)
+    p.censor("conc", below="LLOQ", where="BLQ == 1")
+    with pytest.raises(tf.ProblemError, match=r"LLOQ is missing \(or not a number\) on cens"):
+        p.check()
+    p = tf.Problem(tq.Model.from_text(PK))
+    p.estimate("ke", 0.1)
+    p.method("optimize")
+    p.summary()  # a preview needs no data; what reads them does
+    for read in (p.units, p.table, p.provenance, lambda: tf.fit(p)):
+        with pytest.raises(tf.ProblemError, match='no data; add: data "file.csv"'):
+            read()
+
+
+def test_a_bom_trailing_spaces_and_dur(tmp_path):
+    """Excel's "CSV UTF-8" starts with a BOM; spaces after values are dropped; DUR maps."""
+    f = tmp_path / "bom.csv"
+    f.write_bytes("﻿ID,TIME,DV,DVID,Duration\n1,0,1.5,bact ,1\n1,1,2.5,bact,1\n"
+                  .encode())  # fmt: skip
+    from tenqsp_fit.data import apply_map, read_table
+
+    df, _, _ = read_table(str(f))
+    assert list(df.columns)[0] == "ID" and list(df.DVID) == ["bact", "bact"]
+    assert "DUR" in apply_map(df, {"DUR": "Duration"}).columns
+
+
+def test_a_measurement_at_the_start_of_an_infusion_is_read():
+    """An infusion does not jump the value, so a sample at its start is not ambiguous."""
+    df = pd.DataFrame(dict(ID=1, TIME=[0, 1, 6, 6], AMT=[100, np.nan, 50, np.nan],
+                           RATE=[np.nan, np.nan, 25, np.nan], EVID=[1, 0, 1, 0],
+                           DV=[np.nan, 3.1, np.nan, 4.0], CMT=[1, 2, 2, 2]))  # fmt: skip
+    p = problem(df, doses={"cmt": {1: "depot", 2: "centr"}})
+    np.testing.assert_array_equal(p.units()[0].observations["conc"].times, [1, 6])

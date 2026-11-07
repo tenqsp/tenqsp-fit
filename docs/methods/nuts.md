@@ -59,7 +59,8 @@ The maximum tree depth is 10.
 
 ## Convergence
 
-Per quantity: rank-normalized split R-hat and bulk and tail effective sample sizes (ArviZ).
+Per quantity: rank-normalized split R-hat (with one chain, of its two halves) and bulk and tail
+effective sample sizes (ArviZ).
 Per chain: divergences after warmup, energy BFMI, how often a trajectory reached the maximum
 tree depth, and the mean steps per draw (`result.convergence()`). The doctor reports a problem
 when

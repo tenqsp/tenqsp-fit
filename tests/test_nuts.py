@@ -430,3 +430,16 @@ def test_to_arviz_with_units(tmp_path):
     z = dt["posterior"]["z(A)"]
     assert z.dims == ("chain", "draw", "unit") and list(z.unit.values) == list(r.objective.units)
     np.testing.assert_allclose(np.median(z.values.reshape(-1, z.shape[2]), axis=0), r.modes[:, 0])
+
+
+def test_one_chain_has_an_r_hat_of_its_halves():
+    """Split R-hat works with one chain (its two halves): a drifting chain is flagged."""
+    from tenqsp_fit.nuts import _diagnostics
+
+    rng = np.random.default_rng(0)
+    n = 400
+    X = np.stack([rng.normal(size=n), np.cumsum(rng.normal(size=n))], axis=-1)[None]  # (1, n, 2)
+    arr = {k: np.zeros((1, n)) for k in ("energy", "div", "step", "steps")}
+    arr["energy"] = rng.normal(size=(1, n))
+    rows, _ = _diagnostics(X, arr, 0)
+    assert rows[0]["rhat"] < 1.01 and rows[1]["rhat"] > 1.1
