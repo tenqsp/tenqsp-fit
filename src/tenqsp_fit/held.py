@@ -20,7 +20,8 @@ from .priors import written_penalty
 def held_fitter(result, j: int):
     """``fit(h, start, warm) -> (u, m2ll, status, warm)``: the quantities other than ``j``
     refitted from ``start`` (all of them, estimation scale) with quantity ``j`` held at ``h``
-    (estimation scale). ``warm`` carries the modes of ``laplace`` from one point to the next."""
+    (estimation scale). ``m2ll`` is what the fit minimized: -2LL, plus the priors' terms when
+    priors are written. ``warm`` carries the modes of ``laplace`` from one point to the next."""
     if result.method == "laplace":
         return _laplace(result, j)
     if result.method == "optimize":
@@ -39,7 +40,7 @@ def _optimize(result, j):
     obj, sc, problem = result.objective, result.scales, result.problem
     maxiter = int(problem._options.get("maxiter") or DEFAULT_MAXITER)
     penalty = written_penalty(problem, result.names, np.asarray(result.x0, float), sc)
-    if not obj.error_estimated and penalty is None:  # as the fit: least squares
+    if obj.sum_of_squares and penalty is None:  # as the fit: least squares
 
         def fn(v, h):
             r = obj._residuals(to_x(_full(v, h, j), sc))
@@ -69,7 +70,8 @@ def _optimize(result, j):
     def fit(h, start, warm=None):
         v, ok = run(jnp.asarray(np.delete(start, j)), jnp.asarray(h, float))
         u = np.asarray(_full(v, h, j))
-        m2ll = float(obj(to_x(jnp.asarray(u), sc)))
+        x = to_x(jnp.asarray(u), sc)
+        m2ll = float(obj(x)) + (0.0 if penalty is None else float(penalty(x)))
         status = "converged" if bool(ok) else "max iterations"
         return u, (m2ll if np.isfinite(m2ll) else np.nan), status, warm
 
@@ -106,7 +108,7 @@ def _laplace(result, j):
         res = minimize(fun, np.delete(start, j), jac=True, method="BFGS",
                        options={"gtol": GTOL, "maxiter": maxiter})  # fmt: skip
         u = np.insert(res.x, j, h)
-        m2ll = float(lap(to_x(jnp.asarray(u), sc)))
+        m2ll = float(lap(to_x(jnp.asarray(u), sc))) + float(pen(jnp.asarray(u)))
         done = bool(res.success) or float(np.max(np.abs(res.jac))) < 10 * GTOL
         status = "converged" if done else ("max iterations" if res.nit >= maxiter else "ended")
         return u, (m2ll if np.isfinite(m2ll) else np.nan), status, Z["Z"]

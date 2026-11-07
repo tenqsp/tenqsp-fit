@@ -135,6 +135,21 @@ def test_profile_interval_and_plot(pooled):
         pooled.profile("kee")
 
 
+def test_profile_with_priors_is_of_what_the_fit_minimized(tmp_path):
+    """With a prior, the fit minimizes -2LL plus the prior's terms; the profile does too, so
+    the estimate is its lowest point (no false 'better fit') and the interval is finite."""
+    p = problem(tmp_path, extra="prior ke ~ lognormal(median=0.12, sdlog=0.1)\n",
+                options="starts=1 seed=1 checks=quick")  # fmt: skip
+    r = tf.fit(p)
+    pr = r.profile("ke", scan=False)
+    assert pr.better is None and pr.m2ll == pytest.approx(r.with_priors)
+    assert pr.objective == "-2LL plus the priors' terms"
+    assert pr.table["-2LL"].min() == pytest.approx(r.with_priors, abs=1e-6)
+    lo, hi = pr.interval
+    assert lo < r.estimates["ke"] < hi
+    assert not [f for f in r.doctor().findings if f.check == "better fit in the profile"]
+
+
 def test_profile_scan_finds_the_flip_flop_optimum(tmp_path):
     """Oral one-compartment PK: swapping ka and ke gives the same curve (flip-flop), so the
     likelihood has a second optimum, exactly as good, at ka = the estimate of ke. The walk

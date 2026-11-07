@@ -146,7 +146,9 @@ observe log10(phage) = DV where DVID == "phage"
 - A condition compares columns with numbers or quoted text (`==`, `!=`, `<`, `<=`, `>`,
   `>=`) and joins comparisons with `and`, `or`, `not`.
 - Every measurement row must be linked once, or left out on purpose:
-  `ignore DV where DVID == "phage"`. Two `observe` lines may not read the same row.
+  `ignore DV where DVID == "phage"`. Two `observe` lines may not read the same row. An
+  `ignore` line wins over the `observe` lines on the same column: `observe conc = DV` with
+  `ignore DV where BLQ == 1` links every measurement except the flagged ones.
 
 When measurements are not linked, the error proposes the lines to write. For the time-kill
 data of the [QSP quickstart](../start/quickstart-qsp.md) without `observe` lines:
@@ -195,7 +197,10 @@ links      log10(bact) <- bact (all rows)   12 rows   ...
            log10(phage) <- phage (all rows)   12 rows
 ```
 
-A row is a measurement of a column when that column has a value and the row is not a dose.
+A row is a measurement of a column when that column has a value, the row is not a dose, and
+it is an observation record: EVID 0 when the table has an EVID column, otherwise not MDV 1.
+So `observe log(conc) = LNDV` on a NONMEM file does not read the 0 that an EVID 2 row holds
+in LNDV. `ignore` works on such columns as on DV: `ignore conc where BLQ == 1`.
 
 ## Below the limit of quantification
 

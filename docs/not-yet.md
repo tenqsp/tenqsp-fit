@@ -26,6 +26,7 @@ something else.
 | mixture models | — |
 | estimating a model parameter that has one value per category (`param k[strain]`) | write one parameter per category in the model |
 | priors on correlations other than LKJ(2) | — |
+| `nuts` sampling a `correlate` block of three or more without an edge (by the Cholesky factor of its correlation matrix) | blocks of two, or `laplace`; see [the limits of `nuts`](methods/nuts.md#limits) |
 
 ## Data
 

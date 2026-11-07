@@ -522,6 +522,10 @@ class Profile:
     distribution with 1 and n - p degrees of freedom, n the measurements (not censored)
     and p the estimated quantities other than the error model's (Bates and Watts 1988,
     profile t; as R's ``confint`` for ``nls``). It approaches the chi-square one as n grows.
+
+    With priors written (``prior`` lines), the fit minimized -2LL plus the priors' terms, so
+    the profile does too: its "-2LL" column and ``m2ll`` are that quantity (``objective``
+    says so), a profile of the posterior mode.
     """
 
     name: str
@@ -535,6 +539,7 @@ class Profile:
     pieces: list = dataclasses.field(default_factory=list)
     scanned: tuple = (float("nan"), float("nan"))
     better: dict | None = None
+    objective: str = "-2LL"
 
     def plot(self, ax=None):
         plt = _pyplot()
@@ -559,7 +564,7 @@ class Profile:
         if self.estimate > 0 and (d.value > 0).all() and d.value.max() / d.value.min() > 20:
             ax.set_xscale("log")
         ax.set_xlabel(self.name)
-        ax.set_ylabel("-2LL above the minimum")
+        ax.set_ylabel(f"{self.objective} above the minimum")
         ax.set_title(f"{self.name}: {self.level:.0%} {self._set_text()}", fontsize=9)
         ax.figure.tight_layout()
         return ax
@@ -578,7 +583,7 @@ class Profile:
         better = ""
         if self.better is not None:
             better = (f"; a better fit than the estimate at {self.name} = "
-                      f"{self.better['value']:.4g} (-2LL lower by "
+                      f"{self.better['value']:.4g} ({self.objective} lower by "
                       f"{self.m2ll - self.better['-2LL']:.3g})")  # fmt: skip
         return (f"<Profile of {self.name}: estimate {self.estimate:.4g}, {self.level:.0%} "
                 f"{self._set_text()}, {len(self.table)} points; cut-off {self.cut:.3g} "
@@ -650,6 +655,10 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
         se_u = np.sqrt(np.diag(getattr(result, "cov_u", np.full((len(names),) * 2, np.nan))))[j]
         step = 0.5 * float(se_u) if np.isfinite(se_u) and se_u > 0 else 0.2
     cut, rule = _cut(level, result)
+    # the quantity the fit minimized: -2LL, plus the priors' terms when priors are written
+    with_priors = getattr(result, "with_priors", None)
+    ref = result.m2ll if with_priors is None else float(with_priors)
+    objective = "-2LL" if with_priors is None else "-2LL plus the priors' terms"
     quiet = result.problem._options.get("progress") == "none"
     t0 = time.perf_counter()
     fit = held_fitter(result, j)
@@ -662,7 +671,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
 
     def say(r, sign, what):
         if not quiet:
-            print(f"   profile {name} = {r['value']:.4g}: -2LL {r['-2LL'] - result.m2ll:+.3g} "
+            print(f"   profile {name} = {r['value']:.4g}: {objective} {r['-2LL'] - ref:+.3g} "
                   f"from the best ({'below' if sign < 0 else 'above'} the estimate, {what}; "
                   f"{time.perf_counter() - t0:.0f} s)", flush=True)  # fmt: skip
 
@@ -676,7 +685,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
             r = row(u, m2ll, status)
             out.append(r)
             say(r, sign, f"point {k}")
-            if not np.isfinite(m2ll) or m2ll - result.m2ll > cut:
+            if not np.isfinite(m2ll) or m2ll - ref > cut:
                 break
         if scan:
             out += scanned(sign, u_end, start, out[-1]["-2LL"] if out else np.nan)
@@ -713,7 +722,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
             u, m2ll = at(h, [pts[-1][1], *others], f"scan {k} of {scan_points}")
             pts.append((h, start if u is None else u, m2ll))
         f = np.array([p_[2] for p_ in pts])
-        inside = lambda m: m - result.m2ll <= cut  # noqa: E731
+        inside = lambda m: m - ref <= cut  # noqa: E731
         for i in range(1, len(pts)):
             a, b = pts[i - 1], pts[i]
             # a dip between grid points: the bottom by golden section, then its piece's ends
@@ -732,16 +741,16 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
 
     with ThreadPoolExecutor(2) as pool:
         lo_side, hi_side = pool.map(side, (-1, 1))
-    centre = {"value": float(result.x[j]), "-2LL": result.m2ll, "status": "estimate",
+    centre = {"value": float(result.x[j]), "-2LL": ref, "status": "estimate",
               **result.estimates}  # fmt: skip
     table = pd.DataFrame([*lo_side, centre, *hi_side]).sort_values("value", kind="stable")
     table = table[["value", "-2LL", "status", *[n for n in names if n != name]]]
     table = table.reset_index(drop=True)
     low = float(np.nanmin(table["-2LL"]))
     better = None
-    if low < result.m2ll - 0.01:
+    if low < ref - 0.01:
         better = table.loc[int(np.nanargmin(table["-2LL"].to_numpy()))].to_dict()
-    floor = min(low, result.m2ll)
+    floor = min(low, ref)
     pieces = _pieces(table, floor, cut)
     interval = (pieces[0][0], pieces[-1][1]) if pieces else (float("nan"), float("nan"))
 
@@ -750,10 +759,10 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
         u[j] = h
         return float(np.asarray(to_x(jnp.asarray(u), sc))[j])
 
-    p = Profile(name=name, estimate=float(result.x[j]), m2ll=result.m2ll, table=table,
+    p = Profile(name=name, estimate=float(result.x[j]), m2ll=ref, table=table,
                 interval=interval, level=level, cut=cut, rule=rule, pieces=pieces,
                 scanned=(x_at(lo_u), x_at(hi_u)) if scan else (float("nan"),) * 2,
-                better=better)  # fmt: skip
+                better=better, objective=objective)  # fmt: skip
     p.seconds = time.perf_counter() - t0
     return p
 

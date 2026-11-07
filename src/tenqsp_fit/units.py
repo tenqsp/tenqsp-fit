@@ -131,20 +131,45 @@ def _have(idx) -> str:
     return "has" if len(idx) == 1 else "have"
 
 
-def link_rows(
-    df: pd.DataFrame, column: str, where: str | None, censor_where: str | None = None
-) -> np.ndarray:
-    """The rows a link (or an ``ignore`` line) reads: measurements in ``column`` (for DV, the
-    observation records), picked by ``where``. Rows its censor line's condition marks
-    (``censor conc where CENS == 1 ...``) are measurements too, whatever their DV."""
+def measurement_rows(df: pd.DataFrame, column: str) -> np.ndarray:
+    """The rows holding a measurement in ``column``: for DV, the observation records; for
+    another column (a wide table, or ``LNDV``), rows with a value there that are observation
+    records too (EVID 0 when there is an EVID column, else not MDV 1) and give no dose."""
     if column == "DV":
-        rows = D.observation_rows(df)
-    else:  # a wide table: a column per observable
-        rows = df[column].notna().to_numpy() & ~D.dose_rows(df)
+        return D.observation_rows(df)
+    rows = df[column].notna().to_numpy() & ~D.dose_rows(df)
+    if "EVID" in df.columns:
+        rows &= (df["EVID"] == 0).to_numpy()
+    elif "MDV" in df.columns:
+        rows &= (df["MDV"].fillna(0) != 1).to_numpy()
+    return rows
+
+
+def ignored_rows(df: pd.DataFrame, column: str, ignored=()) -> np.ndarray:
+    """The rows of ``column`` that ``ignore`` lines leave out (``ignored``: their
+    ``(column, where)``)."""
+    out = np.zeros(len(df), bool)
+    for col, where in ignored:
+        if col == column:
+            out |= link_rows(df, col, where)
+    return out
+
+
+def link_rows(
+    df: pd.DataFrame, column: str, where: str | None, censor_where: str | None = None,
+    ignored=(),
+) -> np.ndarray:  # fmt: skip
+    """The rows a link (or an ``ignore`` line) reads: measurements in ``column``
+    (``measurement_rows``), picked by ``where``. Rows its censor line's condition marks
+    (``censor conc where CENS == 1 ...``) are measurements too, whatever their DV. Rows that
+    ``ignore`` lines on the same column leave out (``ignored``) are not read."""
+    rows = measurement_rows(df, column)
     if censor_where is not None:
         rows = rows | (D.evaluate_condition(censor_where, df) & ~D.dose_rows(df))
     if where is not None:
         rows = rows & D.evaluate_condition(where, df)
+    if ignored:
+        rows = rows & ~ignored_rows(df, column, ignored)
     return rows
 
 
@@ -357,7 +382,8 @@ def build(df: pd.DataFrame, plan: Plan, add, origin_of) -> list[Unit]:
     for lhs, col, where in plan.links:
         limit, cwhere = plan.censors.get("".join(lhs.split()), (None, None))
         cens = censored_rows(df, col, limit, cwhere) if limit is not None else None
-        link_masks.append((lhs, col, link_rows(df, col, where, cwhere), limit, cens))
+        rows = link_rows(df, col, where, cwhere, plan.ignored)
+        link_masks.append((lhs, col, rows, limit, cens))
     units = []
     for k in order:
         in_unit = (keys == k).to_numpy()

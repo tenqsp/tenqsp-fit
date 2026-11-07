@@ -403,16 +403,21 @@ class Objective:
         return out
 
     @property
-    def error_estimated(self) -> bool:
-        """Whether an error model's quantities are estimated, or a likelihood is written
-        (then -2LL is not a sum of squares)."""
-        return any(kind == "x" for lk in self._links for kind, _ in lk["sd_args"]) or any(
-            lk["density"] is not None for lk in self._links
+    def sum_of_squares(self) -> bool:
+        """Whether -2LL is a sum of squares up to a constant of the data: every link has an
+        additive error of known sd. An estimated sd, an sd that changes with the prediction
+        (proportional, combined, power: ``2 log sd`` changes with the parameters) or a
+        written likelihood make it not one."""
+        return all(
+            lk["density"] is None
+            and lk["error"] == "additive"
+            and all(kind == "const" for kind, _ in lk["sd_args"])
+            for lk in self._links
         )
 
     def _residuals(self, x):
-        """-2LL as a sum of squares, up to a constant of the data, when the error model is
-        fixed: ``(DV - f)/sd`` per measured value, ``sqrt(-2 log Phi(...))`` per censored one.
+        """-2LL as a sum of squares, up to a constant of the data, when ``sum_of_squares``:
+        ``(DV - f)/sd`` per measured value, ``sqrt(-2 log Phi(...))`` per censored one.
         Flat, padding 0."""
         x = jnp.asarray(x, dtype=jnp.float64)
         preds = self.predictions(x)

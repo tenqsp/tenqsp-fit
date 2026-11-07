@@ -31,10 +31,14 @@ optimizer, the scale each quantity is estimated on, and how many starts.
 
 ## Decision
 
-- **Levenberg–Marquardt** (Optimistix) with exact Jacobians when every error-model quantity
-  is fixed: −2LL is then a sum of squares up to a constant, censored values included as
-  `sqrt(−2 log Φ((limit − f)/sd))`. **BFGS** with the exact gradient when an error-model
-  quantity is estimated.
+- **Levenberg–Marquardt** (Optimistix) with exact Jacobians when every error model is
+  additive with a known sd: −2LL is then a sum of squares up to a constant, censored values
+  included as `sqrt(−2 log Φ((limit − f)/sd))`. **BFGS** with the exact gradient otherwise:
+  when an error-model quantity is estimated, and when the sd changes with the prediction
+  (proportional, combined, power), whose `2 log sd` terms change with the parameters.
+  *Amended 2026-11-07:* the first version used Levenberg–Marquardt for every fixed error
+  model, which for a proportional one minimized a weighted sum of squares, not −2LL (on a
+  3-subject oral PK example, CL 8 % low and −2LL 1.5 above the minimum).
 - **Scales:** a quantity with two bounds on the logit scale within them, one with a bound
   on one side as `lo + exp(u)` or `hi - exp(u)`, a positive start on the log scale, otherwise
   as written. The summary lists each scale.

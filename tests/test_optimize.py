@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""``method optimize``: multi-start Levenberg-Marquardt (error model fixed) or BFGS (error
-model estimated). Oracles: oral one-compartment PK in closed form, fitted by scipy's
+"""``method optimize``: multi-start Levenberg-Marquardt (additive errors of known sd) or
+BFGS (otherwise). Oracles: oral one-compartment PK in closed form, fitted by scipy's
 least squares; for an estimated additive sd, its closed form at the minimum (sd^2 = RSS/n)."""
 
 from pathlib import Path
@@ -83,6 +83,40 @@ def test_estimated_sd_by_bfgs(tmp_path, oracle):
     assert r.optimizer == "BFGS" and r.status == "converged"
     np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], x, rtol=1e-4)
     assert r.estimates["conc.additive"] == pytest.approx(np.sqrt(rss / n), rel=1e-4)
+
+
+def test_a_proportional_error_of_known_sd_is_fitted_by_maximum_likelihood(tmp_path):
+    """sd = 0.3 f changes with the parameters, so -2LL is not a sum of squares (its 2 log sd
+    terms move): BFGS on -2LL, at scipy's minimum of the closed form's -2LL."""
+    from scipy.optimize import minimize
+
+    df = table()
+    t, dose, dv = df.TIME.to_numpy(), df.Dose.to_numpy(), df.DV.to_numpy()
+
+    def m2ll(lx):
+        f = conc(t, dose, *np.exp(lx))
+        sd = 0.3 * np.abs(f)
+        return float(np.sum(((dv - f) / sd) ** 2 + 2 * np.log(sd) + np.log(2 * np.pi)))
+
+    ml = minimize(m2ll, np.log([1.5, 0.04, 0.08]), method="Nelder-Mead",
+                  options=dict(xatol=1e-10, fatol=1e-10, maxiter=20000))  # fmt: skip
+    r = tf.fit(problem(tmp_path, error="proportional(fix(0.3))"))
+    assert r.optimizer == "BFGS" and r.status == "converged"
+    np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], np.exp(ml.x),
+                               rtol=1e-4)  # fmt: skip
+    assert r.m2ll == pytest.approx(ml.fun, abs=1e-6)
+
+
+def test_a_step_to_where_the_model_does_not_run_is_never_taken(tmp_path):
+    """ka = sqrt(q) from a poor start with a small sd: the residuals are above 1000 sd, so a
+    failed run must cost more than any run; the fit ends where the model runs and counts the
+    failed runs it tried."""
+    p = problem(tmp_path, error="additive(fix(0.001))", extra="ka = sqrt(q)\n",
+                estimate="q = 0.005 in (-3, 5), CL = 0.2, ke = 0.1",
+                options="starts=1 seed=2 checks=quick")  # fmt: skip
+    r = tf.fit(p)
+    assert np.isfinite(r.m2ll) and r.estimates["q"] > 0
+    assert r.failed_runs > 0
 
 
 def test_bounds_keep_values_inside(tmp_path):

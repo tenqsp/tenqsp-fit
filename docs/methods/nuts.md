@@ -145,6 +145,13 @@ posterior itself gives each quantity's interval.
 - The mass matrix is fixed from the curvature at the starting point; a posterior whose shape
   changes much across its range (a funnel, a banana) can still give divergences, and the
   doctor reports them.
+- In a `correlate` block of three or more quantities, each correlation is sampled within
+  (−1, 1) on its own, and some combinations of them are not a correlation matrix at all (for
+  three quantities: 0.9, 0.9 and −0.9). The sampler cannot go there, and each time it tries,
+  the step counts as a divergent transition. With strong correlations in such a block,
+  divergences can come from this edge rather than from the shape of the posterior, and
+  raising `target_accept` does not remove them. Blocks of two are not affected, and
+  [`laplace`](laplace.md) does not have this limit.
 
 ## References
 

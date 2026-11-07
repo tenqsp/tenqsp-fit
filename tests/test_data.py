@@ -284,3 +284,41 @@ def test_spaces_around_names_and_values(tmp_path):
     f.write_text(nonmem(n=1).to_csv(index=False, na_rep=".").replace(",", ", "))
     p = problem(str(f))
     assert p.units() == problem(nonmem(n=1)).units()
+
+
+def test_a_link_on_another_column_reads_observation_records_only():
+    """observe log(conc) = LNDV on a NONMEM file: a row with EVID 2 (or MDV 1) holding 0 in
+    LNDV is not a measurement."""
+    df = pd.DataFrame(
+        dict(ID=1, TIME=[0, 1, 2, 3], AMT=[100, 0, 0, 0], LNDV=[0, 1.13, 1.39, 0],
+             EVID=[1, 0, 0, 2], MDV=[1, 0, 0, 1], CMT=[1, 2, 2, 2])
+    )  # fmt: skip
+    for data in (df, df.drop(columns="EVID")):
+        p = tf.Problem(tq.Model.from_text(PK))
+        p.data(data)
+        p.doses(cmt={1: "depot"})
+        p.observe("log(conc)", "LNDV")
+        p.error("log(conc)", tf.additive(0.2))
+        p.estimate("ke", 0.1)
+        p.method("optimize")
+        o = p.units()[0].observations["log(conc)"]
+        np.testing.assert_array_equal(o.times, [1, 2])
+
+
+def test_ignore_lines_leave_their_rows_out():
+    """An ignore line on any column leaves its rows out of the fit (not only of the summary);
+    with observe DV, ignore DV where ... is the documented way (no 'linked twice')."""
+    wide = pd.DataFrame(dict(TIME=[1, 2, 3, 4], conc=[1.0, 2, 3, 4], BLQ=[0, 0, 1, 1]))
+    long = wide.rename(columns={"conc": "DV"})
+    for df, column in ((wide, "conc"), (long, "DV")):
+        p = tf.Problem(tq.Model.from_text(PK))
+        p.data(df)
+        p.observe("conc", column)
+        p.ignore(column, where="BLQ == 1")
+        p.error("conc", tf.additive(1))
+        p.estimate("ke", 0.1)
+        p.method("optimize")
+        p.check()
+        np.testing.assert_array_equal(p.units()[0].observations["conc"].values, [1, 2])
+        assert "conc <- " + column + " (all rows)   2 rows" in p.summary()
+        assert p.provenance()["rows"]["linked"] == 2

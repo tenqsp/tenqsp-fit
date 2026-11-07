@@ -765,7 +765,8 @@ def profile_findings(profiles) -> list[Finding]:
             out.append(Finding(
                 "better fit in the profile", "problem",
                 f"the profile of {name} found a fit better than the estimate by "
-                f"{prof.m2ll - better['-2LL']:.3g} in -2LL, at {name} = {better['value']:.4g}: "
+                f"{prof.m2ll - better['-2LL']:.3g} in {getattr(prof, 'objective', '-2LL')}, "
+                f"at {name} = {better['value']:.4g}: "
                 "the fit missed an optimum.",
                 "refit with more starts, or from the profile's best point "
                 "(profile.better has its values).",

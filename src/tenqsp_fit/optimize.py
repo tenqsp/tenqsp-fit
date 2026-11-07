@@ -3,10 +3,12 @@
 """``method optimize``: one set of parameters for all the data, by multi-start optimization
 (Optimistix) with TenQSP's exact derivatives.
 
-- **The optimizer.** With the error model fixed, -2LL is a sum of squares up to a constant of
-  the data: ``(DV - f)/sd`` for each measured value, ``sqrt(-2 log Phi((limit - f)/sd))`` for
-  each censored one; Levenberg-Marquardt minimizes it, with exact Jacobians. With an error
-  model's quantities estimated, -2LL is minimized by BFGS with its exact gradient
+- **The optimizer.** With additive errors of known sd, -2LL is a sum of squares up to a
+  constant of the data: ``(DV - f)/sd`` for each measured value,
+  ``sqrt(-2 log Phi((limit - f)/sd))`` for each censored one; Levenberg-Marquardt minimizes
+  it, with exact Jacobians. Otherwise (an error model's quantities estimated, or an sd that
+  changes with the prediction: proportional, combined, power, whose ``2 log sd`` terms change
+  with the parameters) -2LL is minimized by BFGS with its exact gradient
   (Levenberg-Marquardt converges slowly there: the sd's terms do not go to zero at the
   minimum; theophylline, pooled: 48-61 steps against 18 with sd fixed). Results report -2LL.
 - **Scales.** Each quantity is estimated on a scale where any value is allowed: within its
@@ -51,8 +53,11 @@ from .problem import seconds
 
 __all__ = ["Result"]
 
-BAD = 1e3  # each residual of a failed run (a rejected step), least squares
-BAD_VALUE = 1e12  # -2LL of a failed run, BFGS
+# a failed run (a rejected step): far above any cost a run can have, so that a step to it is
+# never accepted (with 1e3 per residual, a poor start with residuals over 1000 sd had a larger
+# cost than a failed run, and the fit stepped to where the model does not run and ended there)
+BAD = 1e100  # each residual, least squares
+BAD_VALUE = 1e100  # -2LL, BFGS
 FAILED_KEPT = 50  # failed runs whose cause is asked of TenQSP after the fit
 SPREAD_LOG = math.log(5) / 2  # starts on the log scale: 95 % within a factor 5
 MAX_REDRAWS = 20
@@ -585,7 +590,7 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
     from .priors import written_penalty
 
     penalty = written_penalty(problem, names, x0, sc)
-    least_squares = not obj.error_estimated and penalty is None
+    least_squares = obj.sum_of_squares and penalty is None
 
     def total(x):  # what is minimized: -2LL, plus -2 log of the written priors
         v = obj._minus2ll(x)

@@ -1,7 +1,7 @@
 # method optimize
 
 One set of parameters for all the data, by maximum likelihood (least squares when the
-residual error is known), from one or several starts.
+residual error is additive with a known sd), from one or several starts.
 
 Use it for one experiment, for data pooled across subjects, or for a model whose parameters
 do not vary between units. When parameters vary between units, use
@@ -31,8 +31,8 @@ posterior mode.
 
 | The error model | Optimizer | Why |
 |---|---|---|
-| known: every quantity of the error model fixed (`additive(fix(0.02))`) | Levenberg–Marquardt | −2LL is a sum of squares up to a constant; Levenberg–Marquardt uses the Jacobian of the residuals and converges in few steps |
-| estimated | BFGS | the \(\log s_j^2\) terms do not vanish at the minimum, and Levenberg–Marquardt converges slowly there |
+| additive with a known sd (`additive(fix(0.02))`) | Levenberg–Marquardt | −2LL is a sum of squares up to a constant; Levenberg–Marquardt uses the Jacobian of the residuals and converges in few steps |
+| estimated, or an sd that changes with the prediction (`proportional(fix(0.1))`, combined, power) | BFGS | the \(\log s_j^2\) terms change with the parameters, so −2LL is not a sum of squares (and where they are estimated, Levenberg–Marquardt converges slowly) |
 
 Both are [Optimistix](https://docs.kidger.site/optimistix/)'s, with relative and absolute
 tolerances 10⁻⁸ on the parameters and on −2LL, and with TenQSP's exact derivatives of the

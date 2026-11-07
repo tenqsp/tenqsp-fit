@@ -994,15 +994,21 @@ class Problem:
 
     def _rows_of(self, x, df) -> np.ndarray:
         """The rows a link reads (with its censor line's marked rows)."""
-        c = self._censor_of(x.lhs) if isinstance(x, _Observe) else None
-        return U.link_rows(df, x.column, x.where, c.where if c else None)
+        if not isinstance(x, _Observe):
+            return U.link_rows(df, x.column, x.where)
+        c = self._censor_of(x.lhs)
+        return U.link_rows(df, x.column, x.where, c.where if c else None, self._ignored())
+
+    def _ignored(self) -> list:
+        """``(column, where)`` of each ignore line: those rows are left out of every link."""
+        return [(x.column, x.where) for x in self._links if isinstance(x, _Ignore)]
 
     def _plan(self) -> U.Plan:
         return U.Plan(
             unit=self._unit,
             doses=self._doses,
             links=[(x.lhs, x.column, x.where) for x in self._links if isinstance(x, _Observe)],
-            ignored=[(x.column, x.where) for x in self._links if isinstance(x, _Ignore)],
+            ignored=self._ignored(),
             censors={_key(c.lhs): (c.below, c.where) for c in self._censors},
             covariates=self._covariates(),
             reads={o: self._m.reads(o) for o in self._m.observables},
@@ -1165,12 +1171,14 @@ class Problem:
         obs = D.observation_rows(df)
         covered = np.zeros(len(df), int)
         by_row: list[tuple[object, np.ndarray]] = []
-        for x in self._links:
+        # ignore lines first: their rows are left out of the observe lines on the same column
+        ignored: dict[str, np.ndarray] = {}
+        for x in sorted(self._links, key=lambda x: not isinstance(x, _Ignore)):
             if x.column not in df.columns:
                 hint = nearest(x.column, map(str, df.columns))
                 add(x, f"the data have no column '{x.column}'.{hint}")
                 continue
-            rows = obs if x.column == "DV" else (df[x.column].notna().to_numpy() & ~D.dose_rows(df))
+            rows = U.measurement_rows(df, x.column)
             if x.where is not None:
                 try:
                     rows = rows & D.evaluate_condition(x.where, df)
@@ -1179,6 +1187,10 @@ class Problem:
                     continue
             if not rows.any():
                 add(x, f"no measurement matches{' where ' + x.where if x.where else ''}.")
+            if isinstance(x, _Ignore):
+                ignored[x.column] = ignored.get(x.column, np.zeros(len(df), bool)) | rows
+                continue
+            rows = rows & ~ignored.get(x.column, np.zeros(len(df), bool))
             if x.column == "DV":
                 covered += rows
             by_row.append((x, rows))
@@ -1191,6 +1203,7 @@ class Problem:
                 "conditions of the observe lines exclusive.",
             )
         missing = obs & (covered == 0) & ("DV" in df.columns)
+        missing &= ~ignored.get("DV", np.zeros(len(df), bool))
         wide = [x for x in self._links if x.column != "DV"]
         if missing.any() and not (wide and not any(x.column == "DV" for x in self._links)):
             out.append(self._propose(df, missing))
