@@ -73,7 +73,7 @@ the interval's width) has no standard error or interval: the curvature there doe
 it, and a likelihood-ratio test against a value on the bound does not follow the usual
 chi-square. The other quantities' standard errors are computed with it held at the bound, as
 if it were fixed there. The doctor warns about it. Report such an estimate as "at the bound",
-and use a [profile](#profiles) for what the data say about it.
+and use a [profile](#profile-likelihood) for what the data say about it.
 
 **Shrinkage** (with parameters that vary between units): 1 minus the SD of the units' normal
 scores, per varying parameter. Near 0, each unit's own values are informed by its own data;
