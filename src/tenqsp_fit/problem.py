@@ -224,6 +224,8 @@ class _ModelInfo:
 
     def __init__(self, m: tq.Model):
         ir = m.to_ir()
+        self._model = m
+        self._axes_of: dict[str, tuple[str, ...]] = {}
         self.name = ir.name
         # parameters as the fit sees them: one-value parameters, and each entry of a
         # per-category parameter (k[S], k[R]) as a parameter of its own
@@ -231,6 +233,7 @@ class _ModelInfo:
         self.params = {p.name: p for p in ir.params if p.over is None}
         self.params.update(E.entries(ir, self.tables))
         self.axes = [a.name for a in ir.axes]
+        self.labels = {a.name: a.labels for a in ir.axes if a.type == "categorical"}
         self.definitions = {d.name: d.expr for d in ir.definitions}
         self.compartments = [c.name for c in ir.compartments]
         self.fields = [f.name for f in ir.fields]
@@ -251,11 +254,51 @@ class _ModelInfo:
             seen.add(n)
             if n in states:
                 out.add(n)
+            # read with the fit's reader: a per-category parameter (Vo[organ]) is a name of
+            # its own here, where TenQSP's formula reader refuses it
             elif n in self.observable_exprs:
-                todo.extend(tq.formula(self.observable_exprs[n]).names)
+                todo.extend(E.formula(self.observable_exprs[n]).names)
             elif n in self.definitions:
-                todo.extend(tq.formula(self.definitions[n]).names)
+                todo.extend(E.formula(self.definitions[n]).names)
         return out
+
+    def observable_axes(self, name: str) -> tuple[str, ...]:
+        """The axes an observable varies over (none: one value), as TenQSP's compiled model
+        gives them (compiled once; the fit uses the same build)."""
+        if name not in self._axes_of:
+            self._axes_of[name] = tuple(self._model.compile().observable_axes(name))
+        return self._axes_of[name]
+
+    def field_message(self, n: str, axes) -> str:
+        """Why an observable that varies over ``axes`` cannot be linked, and what to write."""
+        over = " and ".join(f"'{a}'" for a in axes)
+        per = "point" if any(a not in self.labels for a in axes) else "category"
+        return (f"the observable {n} has one value per {per} of {over}; a measurement is one "
+                f"value.{self.field_advice(n, axes)}")  # fmt: skip
+
+    def field_advice(self, n: str, axes) -> str:
+        """What to write in place of an observable that varies over ``axes``."""
+        cat = [a for a in axes if a in self.labels]
+        cont = [a for a in axes if a not in self.labels]
+        text = ""
+        if cat:
+            expr = self.observable_exprs.get(n, "")
+            where = ", ".join(f"{a}={self.labels[a][0]}" for a in cat)
+            name = f"{n}_{self.labels[cat[0]][0]}"
+            if _NAME.fullmatch(expr):
+                like = f"e.g. 'observable {name} = {expr}[{where}]'"
+            else:
+                like = f"e.g. 'observable {name} = …' reading each field as C[{where}]"
+            text += (
+                f" Write one observable per category in the model, reading that category "
+                f"({like}), and link each to its measurements."
+            )
+        if cont:
+            text += (
+                f" Over {' and '.join(repr(a) for a in cont)}, write an observable that "
+                f"integrates it (e.g. 'observable total = int_{cont[0]}(…)')."
+            )
+        return text
 
     def param_names(self, text: str) -> set[str]:
         """Model parameters a formula depends on, through the model's named formulas (a
@@ -409,6 +452,16 @@ class Problem:
         if not isinstance(text, str):
             raise TypeError(f"{what}: give the observable as text, e.g. 'conc'.")
         text = text.strip()
+        if (sl := re.search(rf"({_NAME.pattern})\s*\[", text)) is not None:
+            n = sl.group(1)
+            axes = self._m.observable_axes(n) if n in self._m.observables else ()
+            how = " Write an observable with one value in the model and link it."
+            if axes:
+                how = self._m.field_advice(n, axes)
+            raise ValueError(
+                f"{what} {text}: the left side of {what} is a formula of the model's observables; "
+                f"an observable cannot be sliced there.{how}"
+            )
         try:
             names = tq.formula(text).names
         except (ValueError, TypeError) as e:
@@ -423,6 +476,8 @@ class Problem:
                     f"{what}: '{n}' is not an observable of the model.{nearest(n, obs)}"
                     f" Observables: {listed}."
                 )
+            if axes := self._m.observable_axes(n):
+                raise ValueError(f"{what} {text}: {self._m.field_message(n, axes)}")
         return text
 
     @staticmethod

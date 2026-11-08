@@ -27,6 +27,16 @@ versioning; `0.x` releases may change the API.
 ### Fixed
 - `k = k_all` for a parameter per category was accepted when read and failed when the fit
   started; it now sets every category.
+- A model with an observable or a named formula that reads a parameter per category
+  (`observable whole = C*Vo[organ]`) could not be fitted at all, even when that observable was
+  not linked: reading what each observable depends on refused `Vo[organ]`.
+- `observe` refuses an observable with one value per category (or per point of a continuous
+  axis) at that line, and says to write one observable per category; such an observable used
+  to be accepted and the fit then failed inside the library. `observe conc[phage=p1]` says
+  that an observable cannot be sliced there (it suggested `==`).
+- The docs said to write the censored part of the data into a written likelihood, which cannot
+  read the data's columns; they now say to use an error model with `censor`. The estimates
+  chapter says that a quantity which may be negative needs bounds spanning zero.
 
 ## [0.1.0] — first release
 
