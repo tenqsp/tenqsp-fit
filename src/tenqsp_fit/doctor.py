@@ -26,7 +26,8 @@ found with its numbers, and what to do.
   draws); a warning above 1 %. Not for ``laplace``, whose gradient is itself a difference.
 - **jumps in the model**: extinction groups, lag times, and the jumps TenQSP's
   ``validate`` notes (``floor``, ``ceil``, ``rem``, conditions switching cell by cell).
-- **failed runs**: counted with their causes; a warning above 1 % of the fit's runs.
+- **failed runs**: counted with their causes; a warning above 1 % of the fit's runs, unless
+  every failed run checked was far from the estimates.
 - for NUTS, the convergence checks and how much the data narrowed each prior (posterior SD
   over prior SD, on the estimation scale).
 
@@ -448,18 +449,29 @@ def _failed(result) -> list[Finding]:
     if not n:
         return []
     m = int(getattr(result, "evaluations", 0) or 0)
-    if m and n > FAILED_SHARE * m:
+    near = getattr(result, "failures_near", None)  # None: a result saved before it was kept
+    seen = sum((getattr(result, "failure_causes", {}) or {}).values())
+    if m and n > FAILED_SHARE * m and near != 0:
+        where = ""
+        if near is not None and seen:
+            where = f" ({near} of the {seen} checked near the estimates)"
         return [Finding(
             "failed runs", "warning",
-            f"{failed_text(result)}: more than {100 * FAILED_SHARE:.0f} % of the fit's runs "
-            "failed, so the fit spent much of its work outside the region where the model "
-            "runs, and may have stopped at the edge of it.",
+            f"{failed_text(result)}{where}: more than {100 * FAILED_SHARE:.0f} % of the fit's "
+            "runs failed, so the fit spent much of its work outside the region where the "
+            "model runs, and may have stopped at the edge of it.",
             "check the start values and bounds; obj.status(x) at the estimates says why a run "
             "fails; a tighter rtol or bounds that keep the parameters where the model runs "
             "may help.",
         )]  # fmt: skip
-    return [Finding("failed runs", "note", f"{failed_text(result)}; the fit went around "
-                    "them (refused steps).")]  # fmt: skip
+    far = ""
+    if near == 0 and seen:
+        far = (
+            f"; {'all ' if seen > 1 else ''}{seen} checked {'were' if seen > 1 else 'was'} "
+            "far from the estimates (a factor over 100 away in some quantity)"
+        )
+    return [Finding("failed runs", "note", f"{failed_text(result)}{far}; the fit went "
+                    "around them (refused steps).")]  # fmt: skip
 
 
 def _jumps(result) -> list[Finding]:

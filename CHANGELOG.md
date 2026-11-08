@@ -13,6 +13,17 @@ versioning; `0.x` releases may change the API.
   formulas of the fit set them (`k = k_all` gives every category one estimate;
   `k[R] = k[S]*f`). The results, the doctor and the tables name entries as `k[R]`.
 
+### Changed
+- **Shorter steps for `method optimize` and profiles:** one step moves no quantity by more than
+  a factor 100 (on its log or logit scale). Along a nearly flat direction, Levenberg–Marquardt
+  and BFGS could propose steps of hundreds of powers of ten, where the model does not run;
+  each was refused and halved about ten times. In a two-strain phage fit this removes the 12 %
+  of failed runs, makes the fit 2–4 times faster and, from poor starts, keeps a weakly
+  determined rate from being thrown to 1e-195 and left there.
+- **The doctor's failed-runs check** tells failed runs near the estimates from those far from
+  them: when every failed run checked was far (an overshoot the fit came back from) it is a
+  note, not a warning.
+
 ### Fixed
 - `k = k_all` for a parameter per category was accepted when read and failed when the fit
   started; it now sets every category.

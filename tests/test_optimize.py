@@ -422,3 +422,54 @@ def test_fits_do_not_keep_compiled_code(tmp_path):
         tf.fit(problem(tmp_path, options="starts=1"))
         gc.collect()
     assert maps() - before < 300
+
+
+def test_failed_runs_far_from_the_estimates_are_a_note():
+    """A failed run more than one step (a factor 100) from the estimates is an overshoot the
+    fit came back from: with all of them far, the doctor notes them instead of warning; a
+    point not a number says nothing of where, and counts as near."""
+    from types import SimpleNamespace
+
+    from tenqsp_fit.doctor import _failed
+
+    sc = [("log",), ("as is",)]
+    x = np.array([1e-8, 2.0])
+    far = [np.array([1e199, 2.0]), np.array([1e-8, 50.0]), np.array([np.inf, 2.0])]
+    near = [np.array([3e-7, 2.0]), np.array([1e-9, -2.0]), np.array([np.nan, np.nan])]
+    assert O.failures_near(far, x, sc) == 0
+    assert O.failures_near(near, x, sc) == 3
+    assert O.MAX_STEP == pytest.approx(np.log(100))
+
+    def doctor(n_near):
+        r = SimpleNamespace(failed_runs=30, evaluations=200, failures_near=n_near,
+                            failure_causes={"too many steps": 30})  # fmt: skip
+        (f,) = _failed(r)
+        return f
+
+    f = doctor(0)
+    assert f.severity == "note"
+    assert "all 30 checked were far from the estimates" in f.message
+    f = doctor(4)
+    assert f.severity == "warning" and "4 of the 30 checked near the estimates" in f.message
+
+
+def test_steps_are_capped():
+    """No quantity on a log or logit scale moves more than MAX_STEP in one step; one as is is
+    not capped; the direction is kept."""
+    import jax.numpy as jnp
+    import optimistix as optx
+
+    solver = O.capped(optx.LevenbergMarquardt(rtol=1e-8, atol=1e-8), [("log",), ("as is",)])
+
+    class Fixed(optx.AbstractDescent):
+        def init(self, y, f):
+            return None
+
+        def query(self, y, f, state):
+            return None
+
+        def step(self, step_size, state):
+            return jnp.array([46.0, 1000.0]), optx.RESULTS.successful
+
+    d, _ = O._Capped(Fixed(), solver.descent.cap).step(1.0, None)
+    np.testing.assert_allclose(d, [O.MAX_STEP, 1000.0 * O.MAX_STEP / 46.0])

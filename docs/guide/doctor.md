@@ -183,7 +183,9 @@ The model runs that failed during the fit (steps the optimizer refused), out of 
 it made, with their causes as TenQSP gives them (for the first 50). A few are normal: an
 optimizer tries values far out of range. A **note** up to 1 % of the runs; above that a
 **warning**: the fit spent much of its work where the model does not run, and may have
-stopped at the edge of that region. `obj.status(x)` (with `obj = tf.objective(problem)`)
+stopped at the edge of that region. The warning is kept for failed runs near the estimates:
+when every failed run checked lies more than one step (a factor 100) from them, the fit went
+out and came back, and it stays a note. `obj.status(x)` (with `obj = tf.objective(problem)`)
 says why a run fails at given values.
 
 ### After `nuts`

@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .optimize import BAD, BAD_VALUE, DEFAULT_MAXITER, TOL, to_x
+from .optimize import BAD, BAD_VALUE, DEFAULT_MAXITER, TOL, capped, to_x
 from .priors import written_penalty
 
 
@@ -46,7 +46,7 @@ def _optimize(result, j):
             r = obj._residuals(to_x(_full(v, h, j), sc))
             return jnp.where(jnp.all(jnp.isfinite(r)), r, BAD)
 
-        solver = optx.LevenbergMarquardt(rtol=TOL, atol=TOL)
+        solver = capped(optx.LevenbergMarquardt(rtol=TOL, atol=TOL), sc[:j] + sc[j + 1 :])
 
         def solve(v0, h):
             return optx.least_squares(fn, solver, v0, args=h, max_steps=maxiter, throw=False)
@@ -57,7 +57,7 @@ def _optimize(result, j):
             f = obj._minus2ll(x) + (0.0 if penalty is None else penalty(x))
             return jnp.where(jnp.isfinite(f), f, BAD_VALUE)
 
-        solver = optx.BFGS(rtol=TOL, atol=TOL)
+        solver = capped(optx.BFGS(rtol=TOL, atol=TOL), sc[:j] + sc[j + 1 :])
 
         def solve(v0, h):
             return optx.minimise(fn, solver, v0, args=h, max_steps=maxiter, throw=False)
