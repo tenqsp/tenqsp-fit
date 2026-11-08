@@ -130,6 +130,70 @@ Each unit's CL is then lognormal around `CL_pop*(WT/70)^0.75` for its own weight
 `correlate ka, CL` estimates the correlation of ka and CL between units, from 0 (or from
 `correlate ka, CL = -0.3`). Three or more names correlate every pair, as NONMEM's BLOCK.
 
+A spread can be shared by several parameters (NONMEM's `SAME`) by naming it and estimating
+the name once:
+
+```text
+estimate ka ~ lognormal(median=1.5, sdlog=w)
+estimate CL ~ lognormal(median=0.04, sdlog=w)
+estimate w = 0.4
+```
+
+## Parameters per category
+
+A model parameter with one value per category, such as `param k[strain] = {S: 1e-8, R: 1e-10}`
+over a categorical axis `strain`, has one entry per category: `k[S]` and `k[R]`; over two
+axes, `kp[liver, tissue]`. In a fit each entry is a parameter of its own: it is estimated,
+fixed, set by a formula, given a prior or varies between units like any other. Entries not
+named keep the model's values. `k[strain]`, with the axis in brackets, names every entry at
+once.
+
+| Fit text | What it does |
+|---|---|
+| `estimate k[strain] = {S: 3e-8, R: 3e-11}` | every category estimated, each from its own start |
+| `estimate k[strain] = 1e-9` | every category estimated, all from the same start |
+| `estimate k[R] = 3e-11` | one category estimated; S keeps the model's value |
+| `fix k[S] = 1e-8` | one category held at a value other than the model's |
+| `estimate k[strain] = {S: 3e-8, R: 3e-11} in (1e-14, 1e-5)` | the bounds hold for each entry on the line |
+| `estimate kp[organ, sub] = {liver: {vascular: 1, tissue: 2}, gut: {vascular: 1, tissue: 1}}` | over two axes: nested braces, one level per axis |
+| `estimate k[R] ~ lognormal(median=1e-10, cv=0.5)` | one category varies between units |
+| `prior k[strain] ~ lognormal(median=1e-9, sdlog=3)` | the same prior on each entry |
+| `correlate k[S], k[R]` | entries that vary between units, correlated |
+
+In braces every category is given; to estimate some categories only, name them one by one.
+Different bounds for different categories go on separate lines:
+
+```text
+estimate k[S] = 3e-8 in (1e-10, 1e-6)
+estimate k[R] = 3e-11 in (1e-14, 1e-8)
+```
+
+The data often cannot tell every category apart. A formula of the fit then gives several
+entries one estimate:
+
+```text
+k = k_all                  # every strain: one estimate (k[strain] = k_all says the same)
+estimate k_all = 1e-9
+```
+
+```text
+kp[muscle] = kp_ms         # muscle and skin share one estimate
+kp[skin] = kp_ms
+estimate kp_ms = 1
+estimate kp[liver] = 2     # liver its own; the other organs keep the model's values
+```
+
+```text
+k[S] = kS                  # R as a fraction of S
+k[R] = kS*f
+estimate kS = 1e-8, f = 0.01
+```
+
+In Python the names are the same: `p.estimate("k[strain]", {"S": 3e-8, "R": 3e-11})`,
+`p.estimate("k[R]", 3e-11, bounds=(1e-14, 1e-8))`, `p.fix("k[S]", 1e-8)`,
+`p.define("k", "k_all")`. The results name entries the same way: `k[R]` in the printout,
+in the doctor's messages and in the tables, and `result.profile("k[R]")`.
+
 ## A worked example
 
 The theophylline data in NONMEM layout ([the data](data.md#the-nonmem-layout-dose-rows)),

@@ -188,9 +188,11 @@ def _check_together(name: str, a: dict) -> None:
 
 
 def _formula_text(v, what: str) -> str:
+    from .entries import formula
+
     text = str(v).strip()
     try:
-        tq.formula(text)
+        formula(text)
     except (ValueError, TypeError) as e:
         raise ValueError(f"{what}: {e}") from None
     return text

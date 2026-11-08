@@ -327,7 +327,10 @@ def _solve_one_unit(result):
     Z = getattr(result, "modes", None)
     P = np.asarray(cond._model_params(x, None if Z is None else jnp.asarray(Z)))
     sc = cond._scenarios[0]
-    params = {**dict(sc.params), **dict(zip(cond._wrt_arg, map(float, P[0]), strict=True))}
+    from . import entries as E
+
+    params = E.merged(sc.params, dict(zip(cond._wrt_arg, map(float, P[0]), strict=True)),
+                      result.problem._m.tables)  # fmt: skip
     times = np.asarray(sc.times, float)
     start = sc.start if sc.start is not None else 0.0
     opts = result.problem._options

@@ -19,6 +19,7 @@ import pandas as pd
 import tenqsp as tq
 
 from . import data as D
+from . import entries as E
 from . import units as U
 from .distributions import (
     _LATER,
@@ -224,7 +225,12 @@ class _ModelInfo:
     def __init__(self, m: tq.Model):
         ir = m.to_ir()
         self.name = ir.name
-        self.params = {p.name: p for p in ir.params}
+        # parameters as the fit sees them: one-value parameters, and each entry of a
+        # per-category parameter (k[S], k[R]) as a parameter of its own
+        self.tables = E.tables(ir)
+        self.params = {p.name: p for p in ir.params if p.over is None}
+        self.params.update(E.entries(ir, self.tables))
+        self.axes = [a.name for a in ir.axes]
         self.definitions = {d.name: d.expr for d in ir.definitions}
         self.compartments = [c.name for c in ir.compartments]
         self.fields = [f.name for f in ir.fields]
@@ -252,8 +258,9 @@ class _ModelInfo:
         return out
 
     def param_names(self, text: str) -> set[str]:
-        """Model parameters a formula depends on, through the model's named formulas."""
-        out, seen, todo = set(), set(), list(tq.formula(text).names)
+        """Model parameters a formula depends on, through the model's named formulas (a
+        per-category parameter used as ``k[strain]``: each of its entries)."""
+        out, seen, todo = set(), set(), list(E.formula(text).names)
         while todo:
             n = todo.pop()
             if n in seen:
@@ -262,7 +269,9 @@ class _ModelInfo:
             if n in self.params:
                 out.add(n)
             elif n in self.definitions:
-                todo.extend(tq.formula(self.definitions[n]).names)
+                todo.extend(E.formula(self.definitions[n]).names)
+            elif (s := E.split(n)) is not None and s[0] in self.tables:
+                out.update(self.tables[s[0]].entries)
         return out
 
 
@@ -428,7 +437,29 @@ class Problem:
         ``tf.lognormal(median=1.5, sdlog=0.5)``; each number is the start of an estimated
         quantity, ``ka.median`` and ``ka.sdlog``). ``bounds=(0, 1)`` keeps a value inside;
         ``bounds=(1, None)`` keeps it above 1 and ``bounds=(None, 0)`` below 0 (``np.inf`` and
-        ``-np.inf`` work as well as ``None``)."""
+        ``-np.inf`` work as well as ``None``).
+
+        A parameter with one value per category is estimated by entry, ``"k[R]"`` (the others
+        keep the model's values), or as a whole, ``"k[strain]"`` with one start per category
+        (``{"S": 3e-8, "R": 3e-11}``) or one start for all; ``bounds`` then hold for each."""
+        entries, table = self._targets(name, "estimate")
+        if table is not None:
+            if isinstance(value, Distribution):
+                raise ValueError(
+                    f"estimate {name} ~ {value}: a parameter per category varies between units "
+                    f"one category at a time: estimate {entries[0]} ~ {value}."
+                )
+            starts = self._table_values(table, value, "estimate", name)
+            for e in entries:
+                self._new_name(e, "estimate")
+            for e in entries:
+                self._estimate_one(e, starts[e], bounds)
+            return
+        if isinstance(value, dict):
+            raise TypeError(self._braces_message(name, "estimate"))
+        self._estimate_one(entries[0], value, bounds)
+
+    def _estimate_one(self, name: str, value, bounds) -> None:
         self._new_name(name, "estimate")
         if isinstance(value, Distribution):
             if bounds is not None:
@@ -456,14 +487,145 @@ class Problem:
         self._params.append(_Estimate(name, start=start, bounds=bounds))
 
     def fix(self, name: str, value: float) -> None:
-        """Hold a parameter at a value (NONMEM's FIX): ``p.fix("V", 30)``."""
-        self._new_name(name, "fix")
-        self._params.append(_Fix(name, _as_float(value, f"fix {name}")))
+        """Hold a parameter at a value (NONMEM's FIX): ``p.fix("V", 30)``; one entry of a
+        parameter per category, ``p.fix("k[S]", 1e-8)``, or all, ``p.fix("k[strain]",
+        {"S": 1e-8, "R": 1e-10})``."""
+        entries, table = self._targets(name, "fix")
+        if table is not None:
+            values = self._table_values(table, value, "fix", name)
+            for e in entries:
+                self._new_name(e, "fix")
+            for e in entries:
+                self._params.append(_Fix(e, values[e]))
+            return
+        if isinstance(value, dict):
+            raise TypeError(self._braces_message(name, "fix"))
+        self._new_name(entries[0], "fix")
+        self._params.append(_Fix(entries[0], _as_float(value, f"fix {entries[0]}")))
+
+    # ------------------------------------------------------------------ parameters per category
+    def _targets(self, name, what: str, *, whole: bool = False, head: str | None = None):
+        """The parameters ``name`` names: ``([name], None)`` for a one-value parameter or a
+        new quantity; ``(["k[R]"], None)`` for one entry; ``(every entry, table)`` for
+        ``k[strain]`` (and for the bare ``k`` when ``whole``, as a formula's target)."""
+        if not isinstance(name, str):
+            raise ValueError(f"{what}: '{name}' is not a name.")
+        name = name.strip()
+        head = head or f"{what} {name}"
+        m = self._m
+        s = E.split(name)
+        if s is None:
+            t = m.tables.get(name)
+            if t is None:
+                return [name], None
+            if whole:
+                return t.entries, t
+            raise ValueError(self._table_message(t, what))
+        tname, labels = s
+        t = m.tables.get(tname)
+        if t is None:
+            if tname in m.params:
+                instead = f"; write {what} {tname}" if what else f"; write {tname} = …"
+                raise ValueError(f"{head}: {tname} has one value, not one per category{instead}.")
+            raise ValueError(
+                f"{head}: the model has no parameter '{tname}' with one value per "
+                f"category.{nearest(tname, m.tables)}"
+            )
+        if labels == t.axes:
+            return t.entries, t
+        if len(labels) != len(t.axes):
+            raise ValueError(
+                f"{head}: {tname} is over {_axes_text(t)}; name "
+                f"{'one category' if len(t.axes) == 1 else 'one category of each'}, e.g. "
+                f"{t.entries[0]}."
+            )
+        for i, lab in enumerate(labels):
+            cats = t.categories(i)
+            if lab in cats:
+                continue
+            if lab in m.axes:
+                raise ValueError(f"{head}: {tname} is over {_axes_text(t)}, not '{lab}'.")
+            raise ValueError(
+                f"{head}: '{t.axes[i]}' has no category {lab}; it has "
+                f"{', '.join(cats)}.{nearest(lab, cats)}"
+            )
+        return [E.entry_name(tname, labels)], None
+
+    def _table_message(self, t, what: str) -> str:
+        cats = t.categories(0)
+        if len(t.axes) == 1:
+            braces = "{" + ", ".join(f"{c}: …" for c in cats) + "}"
+            return (
+                f"{what} {t.name}: {t.name} has one value per category of '{t.axes[0]}' "
+                f"({', '.join(cats)}); {what} {t.bracket()} = {braces}, or one category, e.g. "
+                f"{what} {t.entries[-1]} = …."
+            )
+        return (
+            f"{what} {t.name}: {t.name} has one value per category of {_axes_text(t)}; "
+            f"{what} {t.bracket()} = {{…}} (nested braces, one level per axis), or one entry, "
+            f"e.g. {what} {t.entries[0]} = …."
+        )
+
+    def _braces_message(self, name: str, what: str) -> str:
+        return (
+            f"{what} {name}: braces give one value per category of a parameter per category, "
+            f"e.g. {what} k[strain] = {{S: …, R: …}}; {name} takes one number."
+        )
+
+    def _table_values(self, t, value, what: str, written: str) -> dict[str, float]:
+        """One number per entry from one number (for all) or braces by category (nested for
+        several axes), every category given."""
+        if not isinstance(value, dict):
+            if isinstance(value, Fixed):
+                raise TypeError(f"{what} {written}: a fixed value is written fix {written} = ….")
+            v = _as_float(value, f"{what} {written}")
+            return {e: v for e in t.entries}
+        out: dict[str, float] = {}
+
+        def walk(d, i: int, path: tuple[str, ...]) -> None:
+            cats = t.categories(i)
+            where = f" (under {', '.join(path)})" if path else ""
+            unknown = [str(k) for k in d if k not in cats]
+            if unknown:
+                raise ValueError(
+                    f"{what} {written}: '{t.axes[i]}' has no category {', '.join(unknown)}"
+                    f"{where}; it has {', '.join(cats)}."
+                )
+            missing = [c for c in cats if c not in d]
+            if missing:
+                first = [c for c in cats if c in d]
+                alone = (
+                    f", or {what} {E.entry_name(t.name, (*path, first[0]))} = … alone"
+                    if first and i == len(t.axes) - 1
+                    else ""
+                )
+                raise ValueError(
+                    f"{what} {written}: {', '.join(missing)} {'is' if len(missing) == 1 else 'are'}"
+                    f" missing{where}; give every category{alone}."
+                )
+            for c in cats:
+                v = d[c]
+                if i < len(t.axes) - 1:
+                    if not isinstance(v, dict):
+                        raise ValueError(
+                            f"{what} {written}: {t.name} is over {_axes_text(t)}; give nested "
+                            "braces, one level per axis."
+                        )
+                    walk(v, i + 1, (*path, c))
+                else:
+                    e = E.entry_name(t.name, (*path, c))
+                    out[e] = _as_float(v, f"{what} {e}")
+
+        walk(value, 0, ())
+        return out
 
     def _new_name(self, name, what: str) -> None:
-        if not isinstance(name, str) or not _NAME.fullmatch(name) or keyword.iskeyword(name):
-            raise ValueError(f"{what}: '{name}' is not a name.")
         m = self._m
+        is_param = isinstance(name, str) and name in m.params
+        if not is_param and (
+            not isinstance(name, str) or not _NAME.fullmatch(name) or keyword.iskeyword(name)
+        ):
+            raise ValueError(f"{what}: '{name}' is not a name.")
         if name in m.definitions:
             ps = sorted(m.param_names(m.definitions[name]))
             instead = f"; {what} {' or '.join(ps)} instead" if ps else ""
@@ -473,12 +635,6 @@ class Problem:
             )
         if name in m.compartments or name in m.fields or name in m.observables:
             raise ValueError(f"{what} {name}: {name} is a state or an observable of the model.")
-        p = m.params.get(name)
-        if p is not None and p.over is not None:
-            raise ValueError(
-                f"{what} {name}: {name} has one value per category of '{p.over}'; estimating "
-                "such a parameter arrives in a later release."
-            )
         for d in self._params:
             if d.name == name:
                 was = "estimated" if isinstance(d, _Estimate) else "fixed"
@@ -493,11 +649,9 @@ class Problem:
         ``start`` (two names only) is the starting correlation; otherwise 0."""
         if len(names) < 2:
             raise TypeError("correlate: name two or more parameters, e.g. correlate('ka', 'CL').")
+        names = tuple(self._entry_or_name(n, "correlate") for n in names)
         if len(set(names)) != len(names):
             raise ValueError(f"correlate: a name is given twice in {', '.join(names)}.")
-        for n in names:
-            if not isinstance(n, str) or not _NAME.fullmatch(n):
-                raise ValueError(f"correlate: '{n}' is not a name.")
         if start is not None:
             if len(names) != 2:
                 raise TypeError("correlate: a start is for one pair; give two names with it.")
@@ -511,24 +665,45 @@ class Problem:
     def define(self, name: str, formula: str) -> None:
         """Set a model parameter by a formula for this fit only, leaving the model unchanged
         (as NONMEM's $PK): ``p.define("ka", "mu")``. Not needed when the model already has the
-        formula."""
-        if not isinstance(name, str) or not _NAME.fullmatch(name):
+        formula. For a parameter per category: one entry, ``p.define("k[R]", "k[S]*f")``, or
+        every entry, ``p.define("k[strain]", "k_all")`` (``"k"`` alone says the same)."""
+        if isinstance(name, str) and not _NAME.fullmatch(name.strip()) and not E.split(name):
             raise ValueError(f"'{name}' is not a name.")
+        entries, _ = self._targets(name, "", whole=True, head=f"{name} = {formula}")
         m = self._m
-        if name in m.definitions:
+        text = _formula_text(formula, f"{name} = ")
+        for e in entries:
+            if e in m.definitions:
+                raise ValueError(
+                    f"{e} = {formula}: the model already sets {e} = {m.definitions[e]}; "
+                    "estimate what it depends on, or change the model."
+                )
+            if e not in m.params:
+                raise ValueError(
+                    f"{e} = {formula}: the model has no parameter '{e}'."
+                    f"{nearest(e, m.params)} A formula after 'fit' sets a model parameter; a "
+                    "new quantity is declared with estimate or fix."
+                )
+            if any(d.name == e for d in self._params) or any(d.name == e for d in self._defines):
+                raise ValueError(f"{e} = {formula}: {e} is already estimated, fixed or set.")
+        for e in entries:
+            self._defines.append(_Define(e, text))
+
+    def _entry_or_name(self, n, what: str) -> str:
+        """A name as written, or one entry (``k[R]``) with its spacing made standard; a whole
+        table (``k[strain]``) is refused."""
+        if not isinstance(n, str):
+            raise ValueError(f"{what}: '{n}' is not a name.")
+        n = n.strip()
+        if _NAME.fullmatch(n) and n not in self._m.tables:
+            return n
+        entries, table = self._targets(n, what)
+        if table is not None:
             raise ValueError(
-                f"{name} = {formula}: the model already sets {name} = {m.definitions[name]}; "
-                "estimate what it depends on, or change the model."
+                f"{what}: {n} names every category; name entries one by one, e.g. "
+                f"{', '.join(entries[:2])}."
             )
-        if name not in m.params:
-            raise ValueError(
-                f"{name} = {formula}: the model has no parameter '{name}'."
-                f"{nearest(name, m.params)} A formula after 'fit' sets a model parameter; a "
-                "new quantity is declared with estimate or fix."
-            )
-        if any(d.name == name for d in self._params) or any(d.name == name for d in self._defines):
-            raise ValueError(f"{name} = {formula}: {name} is already estimated, fixed or set.")
-        self._defines.append(_Define(name, _formula_text(formula, f"{name} = ")))
+        return entries[0]
 
     def error(self, observable: str, model: ErrorModel) -> None:
         """The residual error of a linked observable: ``p.error("conc", tf.additive(0.7))``;
@@ -581,7 +756,20 @@ class Problem:
 
     def prior(self, name: str, dist: Distribution) -> None:
         """A prior on an estimated quantity: ``p.prior("ke", tf.lognormal(median=0.08,
-        sdlog=0.5))``; quantities of a distribution are named ``ka.median``, ``ka.sdlog``."""
+        sdlog=0.5))``; quantities of a distribution are named ``ka.median``, ``ka.sdlog``.
+        For a parameter per category: one entry, ``"k[R]"``, or the same prior on each
+        estimated entry, ``"k[strain]"``."""
+        if isinstance(name, str) and (s := E.split(name)) is not None:
+            t = self._m.tables.get(s[0])
+            if t is not None and s[1] == t.axes:  # the same prior on each entry
+                for e in t.entries:
+                    self.prior(e, dist)
+                return
+        if isinstance(name, str):  # an entry with standard spacing: k[R], k[R].median
+            name = E.ENTRY.sub(
+                lambda m: E.entry_name(m[1], tuple(x.strip() for x in m[2].split(","))),
+                name.strip(),
+            )
         if not isinstance(dist, Distribution):
             raise TypeError(f"prior {name}: give a distribution, e.g. tf.normal(mean=0, sd=1).")
         for _, v in dist.args:
@@ -701,14 +889,14 @@ class Problem:
         # a new quantity (not a model parameter) must be used by a formula of the fit
         used: set[str] = set()
         for d in self._defines:
-            used |= set(tq.formula(d.formula).names)
+            used |= set(E.formula(d.formula).names)
         for d in varying.values():
             for _, v in d.dist.args:
                 if isinstance(v, str):
-                    used |= set(tq.formula(v).names)
+                    used |= set(E.formula(v).names)
         for lk in self._likelihoods:
             if isinstance(lk.density, str):
-                used |= set(tq.formula(lk.density).names)
+                used |= set(E.formula(lk.density).names)
             else:
                 used |= {d.name for d in self._params}  # a function may use any of them
         for d in self._params:
@@ -721,15 +909,17 @@ class Problem:
                 )
         # names in formulas: estimated or fixed quantities, model parameters, data columns
         known = fit_names | set(m.params) | columns
+        told = set()  # a line that sets every entry of a table is told once per name
         for d in self._defines:
-            for n in sorted(tq.formula(d.formula).names):
-                if n not in known:
+            for n in sorted(E.formula(d.formula).names):
+                if n not in known and (d.origin, d.formula, n) not in told:
+                    told.add((d.origin, d.formula, n))
                     add(d, self._unknown_in_formula(n, f"{d.name} = {d.formula}", columns))
         for d in varying.values():
             for k, v in d.dist.args:
                 if not isinstance(v, str):
                     continue
-                for n in sorted(tq.formula(v).names):
+                for n in sorted(E.formula(v).names):
                     if n in varying:
                         add(
                             d,
@@ -861,7 +1051,7 @@ class Problem:
             if isinstance(lk.density, str):
                 obs = set(tq.formula(lk.lhs).names)
                 known = {"DV"} | obs | fit_names | set(m.params)
-                for n in sorted(tq.formula(lk.density).names):
+                for n in sorted(E.formula(lk.density).names):
                     if n not in known:
                         add(lk, self._unknown_in_formula(n, f"likelihood {lk.lhs}", set()))
         with_error = {_key(e.lhs) for e in self._errors} | written
@@ -998,7 +1188,7 @@ class Problem:
         texts = [d.formula for d in self._defines] + [
             v for d in self._varying() for _, v in d.dist.args if isinstance(v, str)
         ]
-        names = {n for t in texts for n in tq.formula(t).names}
+        names = {n for t in texts for n in E.formula(t).names}
         return sorted(n for n in names if n in columns and n not in taken)
 
     def _censor_marked(self, df) -> np.ndarray:
@@ -1188,6 +1378,17 @@ class Problem:
             )
         if n in self._m.definitions:
             return f"{where}: '{n}' is a formula of the model, not a quantity of the fit."
+        if (sp := E.split(n)) is not None and sp[0] in self._m.tables:
+            t = self._m.tables[sp[0]]
+            if sp[1] == t.axes:
+                return (
+                    f"{where}: '{n}' is every category of {t.name}; a formula of the fit uses one "
+                    f"value per name: name one category, e.g. {t.entries[0]}."
+                )
+            try:
+                self._targets(n, "")
+            except ValueError as e:
+                return f"{where}: {str(e).split(': ', 1)[1]}"
         cands = self._fit_names() | set(self._m.params) | columns
         what = "" if self._data is not None else " (no data are given, so no column either)"
         return (
@@ -1533,7 +1734,7 @@ class Problem:
         texts = [d.formula for d in self._defines] + [
             v for d in self._varying() for _, v in d.dist.args if isinstance(v, str)
         ]
-        return any(name in tq.formula(t).names for t in texts)
+        return any(name in E.formula(t).names for t in texts)
 
     def to_text(self, *, model: bool = False) -> str:
         """The problem as fit text (the part after the model's ``fit`` line). With
@@ -1650,6 +1851,11 @@ class Problem:
 
 def _arg(v) -> str:
     return _num(v) if isinstance(v, int | float) else str(v)
+
+
+def _axes_text(t) -> str:
+    """``'strain'``, or ``'organ' and 'sub'``."""
+    return " and ".join(f"'{a}'" for a in t.axes)
 
 
 _UNITS = {"s": 1.0, "min": 60.0, "h": 3600.0}

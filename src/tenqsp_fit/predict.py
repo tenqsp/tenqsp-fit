@@ -144,7 +144,10 @@ def predict(result, *, regimen=None, times, outputs=None, covariates=None, name=
     E = rng.standard_normal((len(X), 1, q)) if between_units else None
 
     # ---- one build of the model for these times and this regimen
-    fixed = {k: v for k, v in cond._fixed.items() if k in model.params}
+    from .entries import to_tenqsp
+
+    m = problem._m
+    fixed = to_tenqsp({k: v for k, v in cond._fixed.items() if k in m.params}, m.tables)
     scenario = tq.Scenario(times=tuple(map(float, times)), params=fixed,
                            **({} if regimen is None else {"regimen": regimen}))  # fmt: skip
     opts = problem._options
