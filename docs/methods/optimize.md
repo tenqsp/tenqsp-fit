@@ -39,6 +39,13 @@ tolerances 10⁻⁸ on the parameters and on −2LL, and with TenQSP's exact der
 model's outputs (the Jacobian of the residuals, or the gradient of −2LL). The result's first
 line says which was used.
 
+**Step length.** One step moves no quantity by more than a factor 100 (a change of
+\(\ln 100\) on its log or logit scale; quantities estimated as they are have no cap). The
+direction of the step is kept. Without a cap, a nearly flat direction (a rate the data hardly
+determine) can make the optimizer propose values hundreds of powers of ten away, where the
+model does not run; such steps are refused and halved again and again. Profiles use the same
+cap.
+
 **Estimation scales.** Each quantity is estimated on a scale where any value is allowed:
 between bounds `in (lo, hi)` on the logit scale, above a single bound `in (lo, inf)` as
 \(lo + e^u\), below one `in (-inf, hi)` as \(hi - e^u\), else

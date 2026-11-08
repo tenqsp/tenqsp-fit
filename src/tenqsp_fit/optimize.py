@@ -62,6 +62,10 @@ FAILED_KEPT = 50  # failed runs whose cause is asked of TenQSP after the fit
 SPREAD_LOG = math.log(5) / 2  # starts on the log scale: 95 % within a factor 5
 MAX_REDRAWS = 20
 DEFAULT_MAXITER = 200
+# the largest move of a quantity in one step, on its log (or logit) scale: a factor 100. Along
+# a nearly flat direction the optimizers proposed steps of hundreds of powers of ten, where
+# the model does not run; each such step was rejected and halved about ten times
+MAX_STEP = math.log(100)
 TOL = 1e-8  # Levenberg-Marquardt's rtol and atol (changes of the parameters and of -2LL)
 SINGULAR = 1e-12  # Hessian eigenvalue ratio below which it is singular (no standard errors)
 
@@ -587,6 +591,32 @@ class Result:
         return "\n".join(lines)
 
 
+class _Capped(optx.AbstractDescent):
+    """A descent whose step is shortened, keeping its direction, so that no quantity moves
+    more than ``cap`` (one per quantity; inf for none) in one step."""
+
+    inner: optx.AbstractDescent
+    cap: jax.Array
+
+    def init(self, y, f_info_struct):
+        return self.inner.init(y, f_info_struct)
+
+    def query(self, y, f_info, state):
+        return self.inner.query(y, f_info, state)
+
+    def step(self, step_size, state):
+        d, result = self.inner.step(step_size, state)
+        shrink = jnp.min(jnp.where(jnp.abs(d) > self.cap, self.cap / jnp.abs(d), 1.0))
+        return d * shrink, result
+
+
+def capped(solver, sc):
+    """``solver`` with its steps capped at MAX_STEP for the quantities on a log or logit
+    scale (those as is have no natural size, and are not capped)."""
+    cap = jnp.array([np.inf if s[0] == "as is" else MAX_STEP for s in sc])
+    return eqx.tree_at(lambda v: v.descent, solver, _Capped(solver.descent, cap))
+
+
 # ----------------------------------------------------------------------------- the fit
 def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
     opts = problem._options
@@ -622,6 +652,7 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
         solver, fn = optx.LevenbergMarquardt(rtol=TOL, atol=TOL), residuals
     else:
         solver, fn = optx.BFGS(rtol=TOL, atol=TOL), value
+    solver = capped(solver, sc)
     tags = frozenset()
     f_struct, aux_struct = jax.eval_shape(lambda u: fn(u), jnp.asarray(to_u(x0, sc)))
     # jax.jit, not eqx.filter_jit: filter_jit keeps every compiled function of every fit
@@ -861,6 +892,7 @@ def finish(problem, obj, method, optimizer, names, x0, sc, U_start, run, final, 
         failed_runs=int(run.failed.sum()),
         evaluations=int(np.sum(run.evaluations)),
         failure_causes=failure_causes(obj, run.failed_at),
+        failures_near=failures_near(run.failed_at, X[best], sc),
         n_observations=obj.n_observations,
         n_censored=obj.n_censored,
         seconds=time.perf_counter() - t_start,
@@ -886,6 +918,26 @@ def failure_causes(obj, points) -> dict[str, int]:
         cause = bad[0] if bad else "values not finite"
         out[cause] = out.get(cause, 0) + 1
     return out
+
+
+def failures_near(points, x, sc) -> int:
+    """How many of the kept failed runs lie near the estimates ``x``: every quantity within
+    one step (MAX_STEP on its estimation scale) of its estimate, or a point not a number (a
+    step that could not be computed, which says nothing of where). Failed runs far from them
+    are overshoots the fit came back from; near ones say the fit may have ended at the edge of
+    where the model runs."""
+    u = to_u(x, sc)
+    near = 0
+    for p in points:
+        if np.isnan(p).any():
+            near += 1
+            continue
+        try:
+            v = to_u(p, sc)
+        except (ValueError, ZeroDivisionError, OverflowError):  # at a bound or beyond: far
+            continue
+        near += bool(np.all(np.abs(v - u) <= MAX_STEP))
+    return near
 
 
 def _x_of(U, sc):
