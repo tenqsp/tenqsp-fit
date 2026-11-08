@@ -20,6 +20,7 @@ from pathlib import Path
 import tenqsp as tq
 
 from .distributions import Fixed, make_distribution, make_error
+from .entries import formula
 from .errors import FitTextError, nearest
 from .problem import Problem
 
@@ -178,6 +179,28 @@ def _number(text: str, what: str) -> float:
     return float(f.jax([])())
 
 
+def _start(text: str, what: str):
+    """A number, or braces with one number per category (``{S: 3e-8, R: 3e-11}``; nested
+    for a parameter over several axes)."""
+    t = text.strip()
+    if not t.startswith("{"):
+        return _number(t, what)
+    if not t.endswith("}") or _depth_change(t) != 0:
+        raise _Problem(f"{what}: the braces are not closed: {t}")
+    out = {}
+    for item in _split_top(t[1:-1]):
+        if not item:
+            continue
+        kv = _split_at(item, ":")
+        if kv is None or not re.fullmatch(_NAME, kv[0]):
+            raise _Problem(f"{what}: write one value per category, e.g. {{S: 3e-8, R: 3e-11}}.")
+        key, value = kv
+        if key in out:
+            raise _Problem(f"{what}: category {key} is given twice.")
+        out[key] = _start(value, what)
+    return out
+
+
 def _bound(text: str) -> float:
     """A bound: a number, or ``inf``/``-inf`` for an open side."""
     t = text.strip().replace(" ", "")
@@ -213,7 +236,7 @@ def _value(node: ast.expr, src: str, what: str):
             raise _Problem(f"{what}: write fix(value), e.g. fix(0.5).")
         return Fixed(_number(ast.get_source_segment(src, node.args[0]), what))
     try:
-        f = tq.formula(seg)
+        f = formula(seg)
     except (ValueError, TypeError) as e:
         raise _Problem(f"{what}: {e}") from None
     return float(f.jax([])()) if not f.names else seg
@@ -255,7 +278,7 @@ class _Reader:
         try:
             if word in KEYWORDS:
                 getattr(self, "st_" + word)(rest, st)
-            elif re.match(rf"{_NAME}\s*{_ASSIGN}", text):
+            elif re.match(rf"{_NAME}\s*(\[[^\]]*\])?\s*{_ASSIGN}", text):
                 name, formula = _split_at(text, _ASSIGN)
                 self.p.define(name, formula)
             else:
@@ -389,14 +412,14 @@ class _Reader:
                 bounds = tuple(_bound(g) for g in m.groups())
             if value.startswith("fix("):
                 raise _Problem(f"a fixed value is written fix {name} = value.")
-            self.p.estimate(name, _number(value, f"estimate {name}"), bounds=bounds)
+            self.p.estimate(name, _start(value, f"estimate {name}"), bounds=bounds)
 
     def st_fix(self, rest: str, st: _Statement) -> None:
         for item in _split_top(rest):
             parts = _split_at(item, _ASSIGN)
             if parts is None:
                 raise _Problem("write fix V = 30.")
-            self.p.fix(parts[0], _number(parts[1], f"fix {parts[0]}"))
+            self.p.fix(parts[0], _start(parts[1], f"fix {parts[0]}"))
 
     def st_correlate(self, rest: str, st: _Statement) -> None:
         names, start = _split_at(rest, _ASSIGN) or (rest, None)

@@ -24,7 +24,6 @@ something else.
 | Box-Cox and other distributions with a shape parameter (`boxcox`), and fitting a shape parameter by profile | `lognormal`, `logitnormal`, `normal`, `exponential`, `weibull` |
 | `gamma` and `beta` as distributions between units | `lognormal` (gamma(mean, cv=1) is the `exponential`); `logitnormal` for values in (0, 1). Both can be priors already |
 | mixture models | — |
-| estimating a model parameter that has one value per category (`param k[strain]`) | write one parameter per category in the model |
 | priors on correlations other than LKJ(2) | — |
 | `nuts` sampling a `correlate` block of three or more without an edge (by the Cholesky factor of its correlation matrix) | blocks of two, or `laplace`; see [the limits of `nuts`](methods/nuts.md#limits) |
 

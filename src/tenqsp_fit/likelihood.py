@@ -41,6 +41,7 @@ import numpy as np
 import tenqsp as tq
 from jax.scipy.stats import norm
 
+from . import entries as E
 from .distributions import Fixed, quantile
 from .errors import ProblemError
 
@@ -131,7 +132,7 @@ class Objective:
                     f"{'it' if len(missing) == 1 else 'them'} (estimate {missing[0]} = <start>)."
                 ]
             )
-        model_fixed = {n: v for n, v in fixed.items() if n in m.params}
+        model_fixed = E.to_tenqsp({n: v for n, v in fixed.items() if n in m.params}, m.tables)
         scenarios = [
             u.scenario.replace(params=model_fixed) if model_fixed else u.scenario for u in units
         ]
@@ -145,7 +146,7 @@ class Objective:
         fit_values = {**{n: ("x", index[n]) for n in starts if n in index}, **fixed}
         formulas = []  # (target, jax function, names) in declaration order
         for d in problem._defines:
-            f = tq.formula(d.formula)
+            f = E.formula(d.formula)
             formulas.append((d.name, f.jax(list(f.names)), f.names))
         n_units = len(units)
         # parameters that vary between units: a unit's value is the distribution's quantile
@@ -158,7 +159,7 @@ class Objective:
                 if isinstance(v, Fixed):
                     args.append((k, "const", float(v.value)))
                 elif isinstance(v, str):
-                    f = tq.formula(v)
+                    f = E.formula(v)
                     args.append((k, "formula", (f.jax(list(f.names)), f.names)))
                 else:
                     args.append((k, "x", index[f"{d.name}.{k}"]))
@@ -270,7 +271,7 @@ class Objective:
             )
             dens = None
             if isinstance(density, str):
-                df_ = tq.formula(density)
+                df_ = E.formula(density)
                 dens = ("formula", df_.jax(list(df_.names)), df_.names)
             elif density is not None:
                 dens = ("function", density, ())
