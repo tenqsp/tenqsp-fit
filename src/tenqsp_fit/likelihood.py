@@ -198,6 +198,18 @@ class Objective:
 
         self._model_params = model_params
 
+        # a parameter the model declares without a value (``param k``; the fit gives its
+        # start) takes its value at the starts, so the simulation can be built
+        unvalued = [n for n in wrt if m.params[n].value is None]
+        if unvalued:
+            env0 = values(jnp.asarray(self.x0, dtype=jnp.float64))
+            scenarios = [
+                sc.replace(params=E.merged(
+                    sc.params, {n: float(env0[n][i]) for n in unvalued}, m.tables
+                ))
+                for i, sc in enumerate(scenarios)
+            ]  # fmt: skip
+
         # ---- the batched simulation
         outputs = problem._outputs()
         sim_opts = {"rtol": float(opts.get("rtol", 1e-6))}

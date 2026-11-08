@@ -403,3 +403,44 @@ def test_a_shared_sd_beside_its_own(data_file):
     a = np.where(table().TIME < 3, 0.3, 0.4)
     sd = np.sqrt(a**2 + (0.2 * f) ** 2)
     np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, sd), rtol=1e-8)
+
+
+# ----------------------------------------------------------------------------- partial links
+BP = """model bp
+param g = 0.5, kp = 0.2, k = 1e-7
+d_t(B) = g*B - k*B*P
+d_t(P) = -kp*P
+B(0) = 1e5
+observable bact = B
+observable phage = P
+"""
+
+
+def test_a_unit_without_measurements_on_a_link(tmp_path):
+    """A control unit (no phage dosed, P = 0 throughout) measured for bacteria only, one of
+    its bacteria counts censored at its own limit: its phage terms are 0, every term and the
+    gradient are finite, and the censored count is the one row."""
+    rows = []
+    for i, dose in ((1, 1e6), (2, 0.0)):
+        rows.append(dict(ID=i, TIME=0, AMT=dose, DV=np.nan, EVID=1, DVID=0, BLQ=0, LLOQ=np.nan))
+        for t in (1, 2, 4):
+            rows.append(dict(ID=i, TIME=t, AMT=np.nan, DV=5 + 0.2 * t, EVID=0, DVID=1,
+                             BLQ=int(i == 2 and t == 1), LLOQ=5.5))  # fmt: skip
+            if dose:
+                rows.append(dict(ID=i, TIME=t, AMT=np.nan, DV=6 - 0.1 * t, EVID=0, DVID=2,
+                                 BLQ=0, LLOQ=np.nan))  # fmt: skip
+    f = tmp_path / "bp.csv"
+    pd.DataFrame(rows).to_csv(f, index=False, na_rep=".")
+    obj = tf.objective(tf.Problem.from_text(
+        BP + f'fit bp\ndata "{f}"\nunit ID\ndoses into P\n'
+        "observe log10(bact) = DV where DVID == 1\nobserve log10(phage) = DV where DVID == 2\n"
+        "censor log10(bact) where BLQ == 1 below LLOQ\n"
+        "estimate g = 0.4, kp = 0.3\nerror log10(bact) ~ additive(0.3)\n"
+        "error log10(phage) ~ additive(0.3)\nmethod optimize\n" + TIGHT
+    ))  # fmt: skip
+    x = jnp.asarray(obj.x0)
+    terms = obj.terms(x)
+    assert np.all(np.asarray(terms["log10(phage)"])[1] == 0)  # unit 2: no phage rows
+    assert all(np.isfinite(np.asarray(t)).all() for t in terms.values())
+    assert np.isfinite(float(obj(x))) and np.isfinite(np.asarray(jax.grad(obj)(x))).all()
+    assert obj.n_observations == 9 and obj.n_censored == 1
