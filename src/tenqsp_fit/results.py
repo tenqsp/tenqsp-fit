@@ -608,7 +608,7 @@ def _cut(level: float, result=None) -> tuple[float, str]:
     problem = result.problem
     if problem._likelihoods:
         return large
-    errors = {f"{e.lhs}.{q}" for e in problem._errors for q in e.model.quantities}
+    errors = problem._error_names()
     if not any(n in errors for n in result.names):
         return large
     n = int(result.n_observations) - int(getattr(result, "n_censored", 0))

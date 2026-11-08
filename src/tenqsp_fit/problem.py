@@ -915,9 +915,18 @@ class Problem:
             out += [
                 f"{e.lhs}.{q}"
                 for q, v in zip(e.model.quantities, e.model.args, strict=True)
-                if not isinstance(v, Fixed)
+                if not isinstance(v, Fixed | str)
             ]
         return out
+
+    def _error_names(self) -> set[str]:
+        """The names of the error models' quantities: ``conc.a``, and the quantities they
+        name (``additive(s_shared)``)."""
+        return {
+            v if isinstance(v, str) else f"{e.lhs}.{q}"
+            for e in self._errors
+            for q, v in zip(e.model.quantities, e.model.args, strict=True)
+        }
 
     # ------------------------------------------------------------------ checks
     def check(self) -> None:
@@ -926,6 +935,37 @@ class Problem:
         problems = self._problems()
         if problems:
             raise ProblemError(problems)
+
+    def _error_name_problem(self, e, q: str, name: str, varying) -> str | None:
+        """What is wrong with an error model's argument that names a quantity, or None."""
+        what = f"error {e.lhs} ~ {e.model}"
+        decl = next((d for d in self._params if d.name == name), None)
+        if decl is None:
+            return (
+                f"{what}: '{name}' is not declared; add estimate {name} = <start> (or fix "
+                f"{name} = <value>).{nearest(name, self._fit_names())}"
+            )
+        if name in varying:
+            return (
+                f"{what}: '{name}' varies between units; the {q} part of an error model is "
+                f"one value (estimate {name} = <start>)."
+            )
+        if name in self._m.params:
+            return (
+                f"{what}: '{name}' is a parameter of the model; give the {q} part its own "
+                f"name (e.g. s_{name}) and estimate it."
+            )
+        if q == "exponent":
+            return None
+        value = decl.value if isinstance(decl, _Fix) else decl.start
+        lower = decl.bounds[0] if isinstance(decl, _Estimate) and decl.bounds else None
+        if value is None:
+            return None
+        if not value > 0 or (lower is not None and lower < 0):
+            return f"{what}: the {q} part must be > 0; give '{name}' a positive " + (
+                "value." if isinstance(decl, _Fix) else "start and no bounds below 0."
+            )
+        return None
 
     def _problems(self) -> list[str]:
         out: list[str] = []
@@ -949,6 +989,8 @@ class Problem:
             for _, v in d.dist.args:
                 if isinstance(v, str):
                     used |= set(E.formula(v).names)
+        for e in self._errors:
+            used |= {v for v in e.model.args if isinstance(v, str)}
         for lk in self._likelihoods:
             if isinstance(lk.density, str):
                 used |= set(E.formula(lk.density).names)
@@ -1025,6 +1067,11 @@ class Problem:
                     e,
                     f"error {e.lhs}: {e.lhs} is not linked to the data; add observe {e.lhs} = DV.",
                 )
+            for q, v in zip(e.model.quantities, e.model.args, strict=True):
+                if isinstance(v, str):
+                    add_named = self._error_name_problem(e, q, v, varying)
+                    if add_named:
+                        add(e, add_named)
         for c in self._censors:
             x = linked.get(_key(c.lhs))
             if (
@@ -1101,7 +1148,9 @@ class Problem:
                 add(
                     lk,
                     f"likelihood {lk.lhs}: a written likelihood with censoring is not "
-                    "supported; write the censored part into the formula instead.",
+                    "supported (the likelihood does not see the data's columns, such as a BLQ "
+                    "flag or a limit); for censored measurements, use an error model with "
+                    f"censor (error {lk.lhs} ~ additive(...)).",
                 )
             if isinstance(lk.density, str):
                 obs = set(tq.formula(lk.lhs).names)
@@ -1197,7 +1246,7 @@ class Problem:
                     bounds[f"corr({a},{b})"] = (-1.0, 1.0)
         for e in self._errors:
             for q, a in zip(e.model.quantities, e.model.args, strict=True):
-                if not isinstance(a, Fixed):
+                if not isinstance(a, Fixed | str):
                     start[f"{e.lhs}.{q}"] = float(a)
         x0 = np.array([start[n] for n in names], dtype=float)
         return names, x0, [bounds.get(n, (-np.inf, np.inf)) for n in names]

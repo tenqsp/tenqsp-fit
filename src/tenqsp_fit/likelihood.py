@@ -265,7 +265,9 @@ class Objective:
                 else [
                     ("const", float(a.value))
                     if isinstance(a, Fixed)
-                    else ("x", index[f"{lhs}.{q}"])
+                    else ("const", float(fixed[a]))
+                    if isinstance(a, str) and a in fixed
+                    else ("x", index[a if isinstance(a, str) else f"{lhs}.{q}"])
                     for q, a in zip(model.quantities, model.args, strict=True)
                 ]
             )

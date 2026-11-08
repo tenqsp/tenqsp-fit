@@ -101,9 +101,9 @@ _COMBOS: dict[str, list[tuple[str, ...]]] = {
 # functions); the others are priors only for now.
 BETWEEN_UNITS = ("normal", "lognormal", "exponential", "logitnormal", "weibull")
 _LATER = {
-    "gamma": "gamma between units arrives in tenqsp-fit 0.2; lognormal is close for most "
+    "gamma": "gamma between units arrives in a later release; lognormal is close for most "
     "data, and gamma(mean, cv=1) is the exponential",
-    "beta": "beta between units arrives in tenqsp-fit 0.2; logitnormal(median, sdlogit) also "
+    "beta": "beta between units arrives in a later release; logitnormal(median, sdlogit) also "
     "stays in (0, 1)",
     "uniform": "uniform is a prior, not a distribution between units",
 }
@@ -253,13 +253,13 @@ def weibull(**kwargs) -> Distribution:
 
 def gamma(**kwargs) -> Distribution:
     """``gamma(shape=, rate=)``, or ``(shape, scale)``, ``(mean, sd)``, ``(mean, var)``,
-    ``(mean, cv)``. A prior for now; between units in 0.2."""
+    ``(mean, cv)``. A prior for now; between units in a later release."""
     return _make("gamma", kwargs, formulas=False)
 
 
 def beta(**kwargs) -> Distribution:
     """``beta(alpha=, beta=)``, or ``(mean, concentration)``, ``(mean, var)``, ``(mean, sd)``.
-    A prior for now; between units in 0.2."""
+    A prior for now; between units in a later release."""
     return _make("beta", kwargs, formulas=False)
 
 
@@ -290,10 +290,12 @@ ERROR_FORMS = {
 
 @dataclass(frozen=True)
 class ErrorModel:
-    """A residual error model with its starts (or fixed values), e.g. ``additive(0.7)``."""
+    """A residual error model with its starts (or fixed values), e.g. ``additive(0.7)``. An
+    argument may also name a quantity declared by estimate or fix (``additive("s_shared")``),
+    so links that name it share one value."""
 
     name: str
-    args: tuple[float | Fixed, ...]
+    args: tuple[float | Fixed | str, ...]
 
     def __str__(self) -> str:
         return f"{self.name}(" + ", ".join(_arg_text(v) for v in self.args) + ")"
@@ -318,6 +320,14 @@ def make_error(name: str, args: list) -> ErrorModel:
         raise TypeError(f"{name}({sig}) takes {len(need)} number(s), got {len(args)}.")
     out = []
     for q, v in zip(need, args, strict=True):
+        if isinstance(v, str):  # a quantity declared by estimate or fix, shared by name
+            if not v.isidentifier():
+                raise ValueError(
+                    f"{name}: an argument is a number, fix(number) or the name of an estimated "
+                    f"or fixed quantity (e.g. {name}(s_shared)), got {v!r}."
+                )
+            out.append(v)
+            continue
         num = v.value if isinstance(v, Fixed) else _as_float(v, name)
         if q != "exponent" and not num > 0:
             raise ValueError(f"{name}: the {q} part must be > 0 (got {_num(num)}).")
@@ -326,7 +336,9 @@ def make_error(name: str, args: list) -> ErrorModel:
 
 
 def additive(a) -> ErrorModel:
-    """Additive residual error: the SD is ``a`` whatever the prediction."""
+    """Additive residual error: the SD is ``a`` whatever the prediction. ``a`` is a start, a
+    ``fix(value)``, or the name of an estimated or fixed quantity, shared by every link that
+    names it: ``tf.additive("s_shared")`` with ``p.estimate("s_shared", 0.1)``."""
     return make_error("additive", [a])
 
 

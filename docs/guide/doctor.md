@@ -122,6 +122,20 @@ also a Python warning when the fit ends.
 warning  at a bound: k ended at 0.4, near its upper bound 0.4: the bound may be too tight, or the data do not determine k. Widen the bound, or fix k.
 ```
 
+### A quantity held above 0 by its start
+
+A quantity with no bounds and a positive start is estimated on the log scale, so it can never
+become negative (see the estimates chapter). That is right for a rate, and a trap for a
+quantity that may take either sign, such as an offset. A **note** names such a quantity when
+its written prior puts more than 5 % of its weight below 0, or when quantities that share its
+prior (or its table, `k[S]` and `k[R]`) are estimated as they are because their starts were
+negative or 0:
+
+```text
+note     scales: e1 and e3 are estimated on the log scale (a positive start and no bounds), so they cannot become negative, while e2, with the same prior normal(mean=0, sd=0.3), is estimated as is.
+         what to do: if they may be negative, give bounds spanning zero (estimate e1 = <start> in (-1, 1)) or a start of 0.
+```
+
 ### A spread near 0, shrinkage
 
 With parameters that vary between units:

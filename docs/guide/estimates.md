@@ -36,8 +36,8 @@ Every argument is named. The families and the ways of writing them are TenQSP's:
 | `logitnormal` | `(median, sdlogit)`: a value in (0, 1), normal on the logit scale | yes | yes |
 | `exponential` | `(mean)` or `(rate)` | yes | yes |
 | `weibull` | `(shape, scale)` | yes | yes |
-| `gamma` | `(shape, rate)`, `(shape, scale)`, `(mean, sd)`, `(mean, var)`, `(mean, cv)` | in 0.2 | yes |
-| `beta` | `(alpha, beta)`, `(mean, concentration)`, `(mean, var)`, `(mean, sd)` | in 0.2 | yes |
+| `gamma` | `(shape, rate)`, `(shape, scale)`, `(mean, sd)`, `(mean, var)`, `(mean, cv)` | later | yes |
+| `beta` | `(alpha, beta)`, `(mean, concentration)`, `(mean, var)`, `(mean, sd)` | later | yes |
 | `uniform` | `(lower, upper)` | no | yes |
 
 In a lognormal, `median` is the typical value; `mean` is the arithmetic mean, higher by a
@@ -45,7 +45,7 @@ factor exp(sdlog²/2). A family that cannot be used between units yet says so:
 
 ```text
 line 7: estimate g ~ gamma(shape=2, rate=2)
-gamma between units arrives in tenqsp-fit 0.2; lognormal is close for most data, and gamma(mean, cv=1) is the exponential.
+gamma between units arrives in a later release; lognormal is close for most data, and gamma(mean, cv=1) is the exponential.
 ```
 
 ### The scale of each estimate
@@ -268,6 +268,22 @@ The error is normal on the link's scale: on `observe log10(bact) = DV`, an addit
 an additive error on log10 counts (about a constant CV on the counts). In the proportional,
 combined and power models, `f` is kept above 0 by a smooth floor at the solver's absolute
 tolerance, so the SD cannot reach 0 (the summary lists it under `near zero`).
+
+**One SD for several links.** An error model's number may instead be a name, estimated (or
+fixed) once; every link that names it shares that value, as NONMEM's `SAME` for residual
+error:
+
+```text
+observe conc = DV where DVID == 1
+observe conc_tissue = DV where DVID == 2
+estimate s = 0.2
+error conc ~ additive(s)
+error conc_tissue ~ additive(s)
+```
+
+Any part can be shared this way (`combined(0.1, b)` shares only the proportional part). The
+named quantity is one value: it cannot vary between units, and it cannot be a parameter of the
+model.
 
 **A log-normal (exponential) error** has no name of its own: it is an additive error on the
 log scale. Put the logarithm of the measurements in a column of the data and link it on that

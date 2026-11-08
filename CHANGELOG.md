@@ -12,6 +12,13 @@ versioning; `0.x` releases may change the API.
   axes). Entries take bounds, priors, distributions between units and correlations, and
   formulas of the fit set them (`k = k_all` gives every category one estimate;
   `k[R] = k[S]*f`). The results, the doctor and the tables name entries as `k[R]`.
+- **One residual SD for several links** (NONMEM's `SAME` for residual error): an error
+  model's number may be a name estimated or fixed once, `error conc ~ additive(s)` and
+  `error conc2 ~ additive(s)` with `estimate s = 0.2`; in Python `tf.additive("s")`. Any part
+  of `combined` and `power` can be shared this way.
+- **A doctor note on scales:** a quantity held above 0 by the log scale only because its start
+  was positive is named when its written prior puts weight below 0, or when quantities that
+  share its prior (or its table) were estimated as they are.
 
 ### Changed
 - **Shorter steps for `method optimize` and profiles:** one step moves no quantity by more than
@@ -35,7 +42,8 @@ versioning; `0.x` releases may change the API.
   to be accepted and the fit then failed inside the library. `observe conc[phage=p1]` says
   that an observable cannot be sliced there (it suggested `==`).
 - The docs said to write the censored part of the data into a written likelihood, which cannot
-  read the data's columns; they now say to use an error model with `censor`. The estimates
+  read the data's columns; they now say to use an error model with `censor`, and so does the
+  message for a written likelihood given with `censor`. The estimates
   chapter says that a quantity which may be negative needs bounds spanning zero.
 
 ## [0.1.0] — first release

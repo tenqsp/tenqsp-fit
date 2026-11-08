@@ -28,6 +28,9 @@ found with its numbers, and what to do.
   ``validate`` notes (``floor``, ``ceil``, ``rem``, conditions switching cell by cell).
 - **failed runs**: counted with their causes; a warning above 1 % of the fit's runs, unless
   every failed run checked was far from the estimates.
+- **scales**: a quantity held above 0 by the log scale (chosen by a positive start) whose
+  written prior puts more than 5 % below 0, or which shares its prior, or its table
+  (``k[S]``, ``k[R]``), with quantities that may be negative: a note.
 - for NUTS, the convergence checks and how much the data narrowed each prior (posterior SD
   over prior SD, on the estimation scale).
 
@@ -149,6 +152,7 @@ def examine(result, *, quick: bool | None = None, say=None) -> Doctor:
         out += _failed(result)
         out += profile_findings(getattr(result, "_profiles", {}) or {})
     out += _jumps(result)
+    out += _scales(result)
     if quick:
         out.append(Finding("tolerance and gradient checks", "note", "left out "
                            "(options checks=quick)."))  # fmt: skip
@@ -411,6 +415,85 @@ def _spreads(result) -> list[Finding]:
                     "is unreliable this close to 0 (a boundary).",
                     f"consider a spread of 0 ({key}=0: {vname} the same in every unit).",
                 ))  # fmt: skip
+    return out
+
+
+def _may_be_negative(s: tuple) -> bool:
+    """Whether a quantity on the estimation scale ``s`` can take a value below 0."""
+    return s[0] in ("as is", "below") or (s[0] in ("logit", "above") and s[1] < 0)
+
+
+def _prior_below_zero(dist) -> float:
+    """The weight a written prior puts below 0 (0 for a family on positive values)."""
+    from scipy.stats import norm
+
+    a = {k: (v.value if hasattr(v, "value") else v) for k, v in dist.args}
+    if not all(isinstance(v, int | float) for v in a.values()):
+        return 0.0
+    if dist.name == "normal":
+        sd = (
+            a["sd"]
+            if "sd" in a
+            else math.sqrt(a["var"])
+            if "var" in a
+            else a["cv"] * abs(a["mean"])
+        )
+        return float(norm.cdf(-a["mean"] / sd)) if sd > 0 else float(a["mean"] < 0)
+    if dist.name == "uniform":
+        lo, hi = a["lower"], a["upper"]
+        return min(1.0, max(0.0, -lo / (hi - lo))) if hi > lo else 0.0
+    return 0.0
+
+
+def _scales(result) -> list[Finding]:
+    """A quantity held above 0 by its scale (log, from a positive start) although its prior
+    allows negative values, or although quantities sharing its prior (or its table, k[S] and
+    k[R]) may be negative: the sign of the start chose the scale, a common slip."""
+    names, sc = list(result.names), getattr(result, "scales", None)
+    if sc is None:
+        return []
+    neg = {n: _may_be_negative(s) for n, s in zip(names, sc, strict=True)}
+    # on the log scale by its start alone: no bounds, no family that sets the scale
+    by_start = {
+        n
+        for n, s, k in zip(names, sc, result.problem._kinds(names), strict=True)
+        if s[0] == "log" and k is None
+    }
+    priors = {p.name: p.dist for p in result.problem._priors if p.name in neg}
+    groups: dict[str, list[str]] = {}
+    for n, d in priors.items():
+        groups.setdefault(f"prior {d}", []).append(n)
+    for n in names:
+        if "[" in n and "." not in n:
+            groups.setdefault(f"table {n.split('[')[0]}", []).append(n)
+    out = []
+    for key, members in groups.items():
+        held = [n for n in members if n in by_start]
+        free = [n for n in members if neg[n]]
+        if not held:
+            continue
+        what = key.split(" ", 1)[1]
+        weight = _prior_below_zero(priors[members[0]]) if key.startswith("prior") else 0.0
+        if free:
+            why = (
+                f"while {_and_names(free)}, with the same prior {what}, "
+                if key.startswith("prior")
+                else f"while {_and_names(free)} of the same table {what}, "
+            ) + f"{'is' if len(free) == 1 else 'are'} estimated as is"
+        elif weight > 0.05:
+            its = "its" if len(held) == 1 else "their"
+            why = f"but {its} prior {what} puts {weight:.0%} of its weight below 0"
+        else:
+            continue
+        out.append(Finding(
+            "scales", "note",
+            f"{_and_names(held)} {'is' if len(held) == 1 else 'are'} estimated on the log "
+            f"scale (a positive start and no bounds), so {'it' if len(held) == 1 else 'they'} "
+            f"cannot become negative, {why}.",
+            f"if {'it' if len(held) == 1 else 'they'} may be negative, give bounds spanning "
+            f"zero (estimate {held[0]} = <start> in (-1, 1)) or a start of 0.",
+            {"held above 0": held, "may be negative": free},
+        ))  # fmt: skip
     return out
 
 

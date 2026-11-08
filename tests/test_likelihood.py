@@ -368,3 +368,38 @@ def test_only_links_that_need_it_floor_their_observables(data_file):
     g = np.asarray(shifted.predictions(shifted.x0)["conc - 50"])
     assert (g < 0).any()
     np.testing.assert_allclose(g, f - 50, rtol=1e-12)
+
+
+# ----------------------------------------------------------------------------- a shared SD
+TWO = PK + "observable conc_late = centr*ke/CL\n"
+SPLIT = "observe conc = DV where TIME < 3\nobserve conc_late = DV where TIME >= 3\n"
+
+
+@pytest.mark.parametrize("declare", ["estimate s = 0.3", "fix s = 0.3"])
+def test_links_naming_one_sd_share_it(data_file, declare):
+    """Two links whose error models name s: one SD for both, as one link with additive(0.3)
+    (the closed form over all 18 measurements); s is one estimated quantity, or held."""
+    fit = SPLIT + f"estimate ka = 1.4, CL = 0.05, ke = 0.07\n{declare}\n"
+    fit += "error conc ~ additive(s)\nerror conc_late ~ additive(s)"
+    obj = tf.objective(make(data_file, fit, model=TWO))
+    assert obj.names == (("ka", "CL", "ke", "s") if declare.startswith("estimate")
+                         else ("ka", "CL", "ke"))  # fmt: skip
+    dv, f = predictions(obj.x0[:3])
+    np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, 0.3), rtol=1e-8)
+    if declare.startswith("estimate"):  # d(-2LL)/ds: sum over both links
+        x = jnp.asarray(obj.x0)
+        r2 = np.sum((dv - f) ** 2)
+        np.testing.assert_allclose(float(jax.grad(obj)(x)[3]), -2 * r2 / 0.3**3 + 36 / 0.3,
+                                   rtol=1e-7)  # fmt: skip
+
+
+def test_a_shared_sd_beside_its_own(data_file):
+    """combined(a, b) with b shared by name and a per link: three SD quantities."""
+    fit = SPLIT + "estimate ka = 1.4, CL = 0.05, ke = 0.07, b = 0.2\n"
+    fit += "error conc ~ combined(0.3, b)\nerror conc_late ~ combined(0.4, b)"
+    obj = tf.objective(make(data_file, fit, model=TWO))
+    assert obj.names == ("ka", "CL", "ke", "b", "conc.additive", "conc_late.additive")
+    dv, f = predictions(obj.x0[:3])
+    a = np.where(table().TIME < 3, 0.3, 0.4)
+    sd = np.sqrt(a**2 + (0.2 * f) ** 2)
+    np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, sd), rtol=1e-8)

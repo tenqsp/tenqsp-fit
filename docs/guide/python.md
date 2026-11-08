@@ -27,6 +27,7 @@ can be kept.
 | `correlate ka, CL = -0.3` | `p.correlate("ka", "CL", start=-0.3)` |
 | `CL = CL_pop*(WT/70)^beta` | `p.define("CL", "CL_pop*(WT/70)^beta")` |
 | `error conc ~ combined(0.5, 0.1)` | `p.error("conc", tf.combined(0.5, 0.1))` |
+| `error conc ~ additive(s)` (s estimated once) | `p.error("conc", tf.additive("s"))` |
 | `likelihood conc: <log-density>` | `p.likelihood("conc", "<log-density>")`, or a Python function (below) |
 | `prior ke ~ lognormal(median=0.08, sdlog=0.5)` | `p.prior("ke", tf.lognormal(median=0.08, sdlog=0.5))` |
 | `method nuts chains=4` | `p.method("nuts", chains=4)` |
