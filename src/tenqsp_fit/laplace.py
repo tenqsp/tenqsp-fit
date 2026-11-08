@@ -70,6 +70,7 @@ from .optimize import (
     draw_starts,
     finish,
     locked_show,
+    near_bounds,
     no_covariance,
     scales,
     to_u,
@@ -450,6 +451,7 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
             gradient=lambda u: gradient(
                 jnp.asarray(u), jnp.asarray(obj.modes(to_x(jnp.asarray(u), sc), Z))
             ),
+            held=[names.index(n) for n in near_bounds(names, X[best], bounds_written)],
         )
     shrink = {name: float(1.0 - np.std(Z[:, k], ddof=1)) if obj.n > 1 else float("nan")
               for k, (name, _) in enumerate(obj.varying)}  # fmt: skip

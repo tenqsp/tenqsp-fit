@@ -444,3 +444,61 @@ def test_a_unit_without_measurements_on_a_link(tmp_path):
     assert all(np.isfinite(np.asarray(t)).all() for t in terms.values())
     assert np.isfinite(float(obj(x))) and np.isfinite(np.asarray(jax.grad(obj)(x))).all()
     assert obj.n_observations == 9 and obj.n_censored == 1
+
+
+# ----------------------------------------------------------------------------- a PBPK-like gate
+GATE = """model gate
+axis phage categorical [p1, p2]
+axis organ categorical [o1, o2]
+field C(phage, organ)
+param k[phage, organ]
+param Dose[phage] = {p1: 1, p2: 1}
+d_t(C) = -k[phage, organ]*C
+C(0) = Dose[phage]
+observable c11 = C[phage=p1, organ=o1]
+observable c12 = C[phage=p1, organ=o2]
+observable c21 = C[phage=p2, organ=o1]
+observable c22 = C[phage=p2, organ=o2]
+"""
+
+
+def test_entries_shared_sds_doses_from_a_column_and_m3_against_the_closed_form(tmp_path):
+    """The features of a PBPK gate together: entries of a two-axis table without values in
+    the model, estimated, fixed and tied by formulas; the dose read from a data column into a
+    table entry; M3 at a limit per sample; one SD per organ shared by the two phages. -2LL
+    against the closed form C = Dose exp(-k t)."""
+    k = {"11": 0.5, "12": 0.2, "21": 0.3, "22": 0.2}  # k[p2, o2] = k[p1, o2] (a tie)
+    rng = np.random.default_rng(5)
+    rows = []
+    for i, dose in ((1, 1e6), (2, 3e6)):
+        for t in (1.0, 2.0, 6.0):
+            for pair in k:
+                y = np.log10(dose * np.exp(-k[pair] * t)) + 0.2 * rng.normal()
+                lloq = 5.0 + 0.1 * i
+                rows.append(dict(ID=i, TIME=t, DVID=f"c{pair}", LDV=max(y, lloq),
+                                 BLQ=int(y < lloq), LLOQ=lloq, DAMT=dose))  # fmt: skip
+    df = pd.DataFrame(rows)
+    assert df.BLQ.sum() >= 2
+    f = tmp_path / "gate.csv"
+    df.to_csv(f, index=False)
+    fit = f'fit gate\ndata "{f}"\nunit ID\n'
+    for pair in k:
+        fit += f'observe log10(c{pair}) = LDV where DVID == "c{pair}"\n'
+        fit += f"censor log10(c{pair}) where BLQ == 1 below LLOQ\n"
+    fit += "Dose[p1] = DAMT\nDose[p2] = DAMT\n"
+    fit += "estimate k[p1, o1] = 0.5, k[p1, o2] = 0.2\nfix k[p2, o1] = 0.3\nk[p2, o2] = k[p1, o2]\n"
+    fit += "estimate s1 = 0.2, s2 = 0.25\n"
+    for pair in k:
+        fit += f"error log10(c{pair}) ~ additive(s{pair[1]})\n"
+    obj = tf.objective(tf.Problem.from_text(GATE + fit + "method optimize\n" + TIGHT))
+    assert obj.names == ("k[p1, o1]", "k[p1, o2]", "s1", "s2")
+    hand = 0.0
+    for r in df.itertuples():
+        pred = np.log10(r.DAMT) - k[r.DVID[1:]] * r.TIME / np.log(10)
+        sd = 0.2 if r.DVID[2] == "1" else 0.25
+        if r.BLQ:
+            hand += -2 * norm.logcdf((r.LLOQ - pred) / sd)
+        else:
+            hand += ((r.LDV - pred) / sd) ** 2 + 2 * np.log(sd) + math.log(2 * math.pi)
+    np.testing.assert_allclose(float(obj(obj.x0)), hand, rtol=1e-8)
+    assert obj.n_censored == int(df.BLQ.sum())

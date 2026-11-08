@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import tenqsp as tq
 from scipy.optimize import least_squares
 
 import tenqsp_fit as tf
@@ -473,3 +474,58 @@ def test_steps_are_capped():
 
     d, _ = O._Capped(Fixed(), solver.descent.cap).step(1.0, None)
     np.testing.assert_allclose(d, [O.MAX_STEP, 1000.0 * O.MAX_STEP / 46.0])
+
+
+def test_an_estimate_at_its_bound_has_no_se_and_the_others_hold_it(tmp_path):
+    """CL (true 0.04) bounded in (0.045, 0.06) ends at 0.045: marked "lower", no SE or
+    interval; ka's and ke's SEs are those of the fit with CL fixed at 0.045."""
+    r = tf.fit(problem(tmp_path, estimate="ka = 1, CL = 0.05 in (0.045, 0.06), ke = 0.1",
+                       options="starts=1 checks=quick"))  # fmt: skip
+    t = r.table().set_index("quantity")
+    assert t.loc["CL", "bound"] == "lower" and t.loc["ka", "bound"] == ""
+    assert np.isnan(t.loc["CL", "SE"]) and np.isnan(t.loc["CL", "CI 2.5 %"])
+    assert r.covariance_status == "ok"
+    held = tf.fit(problem(tmp_path, estimate="ka = 1, ke = 0.1", extra="fix CL = 0.045\n",
+                          options="starts=1 checks=quick"))  # fmt: skip
+    h = held.table().set_index("quantity")
+    for n in ("ka", "ke"):
+        np.testing.assert_allclose(t.loc[n, "estimate"], h.loc[n, "estimate"], rtol=1e-3)
+        np.testing.assert_allclose(t.loc[n, "SE"], h.loc[n, "SE"], rtol=0.02)
+    assert "at its lower bound" in repr(r)
+
+
+def _value(model, name):
+    return next(p.value for p in model.to_ir().params if p.name == name)
+
+
+def test_the_fitted_model_holds_the_estimates_at_full_precision(tmp_path):
+    """result.model(): the model with the estimates in; written and read back, the values are
+    the same to the last digit; result.save writes it as fitted_model.tq."""
+    r = tf.fit(problem(tmp_path, options="starts=1 checks=quick"))
+    fitted = r.model()
+    again = tq.Model.from_text(fitted.to_text())
+    for n in ("ka", "CL", "ke"):
+        assert _value(again, n) == r.estimates[n]
+    r.save(tmp_path / "run")
+    assert _value(tq.load(tmp_path / "run" / "fitted_model.tq"), "CL") == r.estimates["CL"]
+
+
+def test_the_fitted_model_keeps_the_entries_the_fit_does_not_set(tmp_path):
+    two = """model two
+axis s categorical [x, y]
+param k[s] = {x: 0.1, y: 0.2}
+field A(s)
+d_t(A) = -k[s]*A
+A(0) = 1
+observable y = sum_s(A)/2
+"""
+    f = tmp_path / "d.csv"
+    t = np.array([0.5, 1, 2, 4, 8])
+    pd.DataFrame({"TIME": t, "DV": (np.exp(-0.3 * t) + np.exp(-0.2 * t)) / 2}).to_csv(
+        f, index=False
+    )
+    fit = f'fit two\ndata "{f}"\nobserve y = DV\nestimate k[x] = 0.1\n'
+    fit += "error y ~ additive(0.01)\nmethod optimize\noptions progress=none checks=quick\n"
+    r = tf.fit(tf.Problem.from_text(two + fit))
+    k = _value(tq.Model.from_text(r.model().to_text()), "k")
+    assert k[1] == 0.2 and k[0] == r.estimates["k[x]"] and abs(k[0] - 0.3) < 1e-3

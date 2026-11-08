@@ -265,7 +265,11 @@ the starts of the estimated quantities, named `conc.additive`, `conc.proportiona
 | `power(b, k)` | b·f^k (k = 1 is proportional) | `.proportional`, `.exponent` |
 
 The error is normal on the link's scale: on `observe log10(bact) = DV`, an additive error is
-an additive error on log10 counts (about a constant CV on the counts). In the proportional,
+an additive error on log10 counts, that is, the counts are lognormal around the prediction
+(about a constant CV). The SD is on the log10 scale: an SD of 0.3 in log10 is 0.3 × ln 10 =
+0.69 on the natural-log scale. −2LL is that of the measurements on the link's scale; a
+likelihood written for the counts themselves differs from it by a constant (the Jacobian,
+2 Σ log(y ln 10) for log10), which changes no estimate and no comparison on the same data. In the proportional,
 combined and power models, `f` is kept above 0 by a smooth floor at the solver's absolute
 tolerance, so the SD cannot reach 0 (the summary lists it under `near zero`).
 

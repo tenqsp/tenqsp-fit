@@ -215,12 +215,14 @@ def no_covariance(p: int, status: str | None = None) -> dict:
                 covariance_status=status or STOPPED_SE, hessian_u=nan)  # fmt: skip
 
 
-def covariance(value, u, sc, *, gradient=None) -> dict:
+def covariance(value, u, sc, *, gradient=None, held=()) -> dict:
     """Standard errors from the Hessian of -2LL on the estimation scale, by central
     differences of the values (or of a ``gradient``, when there is one; NONMEM's covariance
     step, R matrix): covariance = 2 H^-1, carried to the reported scale. Returns
     ``se``, ``ci`` (95 %, carried from the estimation scale), ``cov_u`` and
-    ``covariance_status``."""
+    ``covariance_status``. ``held``: the indices of estimates at a bound; they have no
+    standard error, and the others' come from the Hessian without them (held where they
+    are)."""
     u = np.asarray(u, float)
     p, h = len(u), FD_STEP
     E = np.eye(p) * h
@@ -254,14 +256,19 @@ def covariance(value, u, sc, *, gradient=None) -> dict:
     workers.shutdown()
     H = 0.5 * (H + H.T)
     status = "ok"
+    keep = np.array([i for i in range(p) if i not in set(held)], dtype=int)
+    cov_u = np.full((p, p), np.nan)
     try:
-        np.linalg.cholesky(H)
-        eig = np.linalg.eigvalsh(H)
-        if eig[0] <= SINGULAR * eig[-1]:  # positive only by round-off: an exact ridge
-            raise np.linalg.LinAlgError
-        cov_u = 2.0 * np.linalg.inv(H)
-        if not np.all(np.isfinite(np.diag(cov_u)) & (np.diag(cov_u) > 0)):
-            raise np.linalg.LinAlgError
+        if len(keep):
+            Hk = H[np.ix_(keep, keep)]
+            np.linalg.cholesky(Hk)
+            eig = np.linalg.eigvalsh(Hk)
+            if eig[0] <= SINGULAR * eig[-1]:  # positive only by round-off: an exact ridge
+                raise np.linalg.LinAlgError
+            ck = 2.0 * np.linalg.inv(Hk)
+            if not np.all(np.isfinite(np.diag(ck)) & (np.diag(ck) > 0)):
+                raise np.linalg.LinAlgError
+            cov_u[np.ix_(keep, keep)] = ck
     except np.linalg.LinAlgError:
         cov_u = np.full((p, p), np.nan)
         status = (
@@ -364,7 +371,8 @@ class Result:
         """Estimates with standard errors, RSE % (100 SE / |estimate|) and 95 % intervals
         (from the estimation scale, so a positive quantity's interval stays positive); for a
         distribution's spread, the other usual forms alongside (a lognormal's sdlog, CV and
-        variance, NONMEM's OMEGA)."""
+        variance, NONMEM's OMEGA); ``bound``: "lower" or "upper" for an estimate at a bound
+        written for it (no SE or interval; the others' are computed with it held there)."""
         se = getattr(self, "se", np.full(len(self.names), np.nan))
         ci = getattr(self, "ci", np.full((len(self.names), 2), np.nan))
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -378,6 +386,7 @@ class Result:
                 "CI 2.5 %": ci[:, 0],
                 "CI 97.5 %": ci[:, 1],
                 "also": [self._also(n) for n in self.names],
+                "bound": [self.near_bounds.get(n, ("",))[0] for n in self.names],
             }
         )
 
@@ -407,6 +416,48 @@ class Result:
                 for k, v in other.items() if k != key
             )  # fmt: skip
         return ""
+
+    def model(self, unit=None):
+        """The model with the fitted values in: a TenQSP model whose parameters set by the fit
+        (estimated, fixed, or set by a formula of the fit, entries of tables included) hold
+        their values at the estimates. A parameter that varies between units takes its typical
+        value (normal score 0). When the values differ between units (a covariate in a
+        formula), name the unit: ``result.model(unit=3)``. ``.to_text()`` writes it at full
+        precision; ``result.save()`` writes it as ``fitted_model.tq``."""
+        import dataclasses
+
+        import tenqsp as tq
+
+        obj, m = self.objective, self.problem.model
+        env = obj._unit_values(jnp.asarray(self.x, dtype=jnp.float64))
+        info = self.problem._m
+        names = [n for n in info.params if n in env and (n in obj._wrt or n in obj._fixed)]
+        ids = [u.id for u in obj._units]
+        if unit is None:
+            differ = [n for n in names if not np.all(np.asarray(env[n]) == np.asarray(env[n])[0])]
+            if differ:
+                raise ValueError(
+                    f"{', '.join(differ[:3])}{' ...' if len(differ) > 3 else ''} differ between "
+                    f"units (a covariate); name the unit: result.model(unit={ids[0]!r})."
+                )
+            i = 0
+        else:
+            match = [k for k, v in enumerate(ids) if v == unit or str(v) == str(unit)]
+            if not match:
+                raise ValueError(f"no unit {unit!r}; units: {', '.join(map(str, ids[:5]))} ...")
+            i = match[0]
+        values = {n: float(np.asarray(env[n])[i]) for n in names}
+        ir = m.to_ir()
+        params = []
+        for p in ir.params:
+            if p.over is None:
+                params.append(dataclasses.replace(p, value=values.get(p.name, p.value)))
+                continue
+            entries = info.tables[p.name].entries
+            old = (None,) * len(entries) if p.value is None else tuple(p.value)
+            new = tuple(values.get(e, v) for e, v in zip(entries, old, strict=True))
+            params.append(dataclasses.replace(p, value=new))
+        return tq.Model.from_ir(dataclasses.replace(ir, params=tuple(params)))
 
     def individual(self) -> pd.DataFrame:
         """Each unit's normal scores (conditional modes, NONMEM's EBEs) and its values of
@@ -574,7 +625,8 @@ class Result:
             rse = f"{row[3]:.3g}" if np.isfinite(row[3]) else ""
             se = f"{row[2]:.4g}" if np.isfinite(row[2]) else ""
             # each column keeps a space before it, however long a number (same widths)
-            lines.append(f"{row[0]:<21} {row[1]:>11.5g} {se:>10} {rse:>6}   {ci:<22}  {row[6]}")
+            also = ", ".join(t for t in (f"at its {row[7]} bound" if row[7] else "", row[6]) if t)
+            lines.append(f"{row[0]:<21} {row[1]:>11.5g} {se:>10} {rse:>6}   {ci:<22}  {also}")
         if getattr(self, "with_priors", None) is not None:
             lines += ["", f"with the written priors: the estimates are the posterior mode; "
                       f"-2LL plus the priors' terms {self.with_priors:.4f}"]  # fmt: skip
@@ -708,8 +760,10 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
         cov = no_covariance(len(names), None if with_se else NOT_ASKED)
     else:
         gradient = jax.jit(jax.grad(lambda u: total(to_x(u, sc))))
+        at = near_bounds(names, run.X[best], user_bounds(problem, names))
         cov = covariance(None, to_u(run.X[best], sc), sc,
-                         gradient=lambda u: gradient(jnp.asarray(u)))  # fmt: skip
+                         gradient=lambda u: gradient(jnp.asarray(u)),
+                         held=[names.index(n) for n in at])  # fmt: skip
     return finish(problem, obj, "optimize", "Levenberg-Marquardt" if least_squares else "BFGS",
                   names, x0, sc, U_start, run, final, redrawn, user_bounds(problem, names),
                   t_start, objective=obj, rank=rank,
