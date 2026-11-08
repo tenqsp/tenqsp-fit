@@ -5,6 +5,14 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+### Added
+- **Parameters per category.** Each entry of a model parameter with one value per category
+  (`param k[strain]`) is a parameter of the fit: `estimate k[R] = 3e-11`, `fix k[S] = 1e-8`,
+  or the whole table, `estimate k[strain] = {S: 3e-8, R: 3e-11}` (nested braces over several
+  axes). Entries take bounds, priors, distributions between units and correlations, and
+  formulas of the fit set them (`k = k_all` gives every category one estimate;
+  `k[R] = k[S]*f`). The results, the doctor and the tables name entries as `k[R]`.
+
 ### Changed
 - **Shorter steps for `method optimize` and profiles:** one step moves no quantity by more than
   a factor 100 (on its log or logit scale). Along a nearly flat direction, Levenberg–Marquardt
@@ -15,6 +23,10 @@ versioning; `0.x` releases may change the API.
 - **The doctor's failed-runs check** tells failed runs near the estimates from those far from
   them: when every failed run checked was far (an overshoot the fit came back from) it is a
   note, not a warning.
+
+### Fixed
+- `k = k_all` for a parameter per category was accepted when read and failed when the fit
+  started; it now sets every category.
 
 ## [0.1.0] — first release
 

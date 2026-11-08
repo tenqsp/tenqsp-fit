@@ -92,6 +92,7 @@ near zero  kept above 0 by a smooth floor at 1e-6 (the solver's atol): f in conc
 | `ETA` with `EXP(ETA)` | `estimate CL ~ lognormal(median=..., sdlog=...)`: \(\eta = \text{sdlog} \cdot z\) |
 | `OMEGA` (diagonal) | the spread: `sdlog` (\(\omega = \text{sdlog}\), OMEGA = sdlog²), or `cv` |
 | `$OMEGA BLOCK` | `correlate CL, V` (three or more names: every pair) |
+| `$OMEGA ... SAME` (one variance for several ETAs) | name the spread and estimate it once: `sdlog=w` in each, `estimate w = 0.3` |
 | `FIX` | `fix(0.3)` inside a distribution or error model, or `fix V = 32` |
 | `$SIGMA`, `EPS` | `error conc ~ additive(a)`, `proportional(b)`, `combined(a, b)`, `power(b, k)`: the SD itself, not a variance |
 | BLQ, M3 | `censor conc below 0.05`; with a flag and a limit column, `censor conc where BLQ == 1 below LLOQ` |
