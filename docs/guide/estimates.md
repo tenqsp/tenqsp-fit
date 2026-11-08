@@ -61,6 +61,12 @@ step outside its range:
 | a value with one bound, `in (lo, inf)` or `in (-inf, hi)` | above lo as lo + e<sup>u</sup>, below hi as hi − e<sup>u</sup> |
 | a correlation | within (−1, 1) |
 
+A quantity without bounds and with a positive start is therefore estimated on the log scale and
+can never become negative. That is right for a rate or a volume, but not for a quantity that may
+take either sign (an offset, a shift on a log scale): give it bounds that span zero,
+`estimate eta = 0.2 in (-1, 1)`, or a start of 0. Otherwise quantities of the same kind can end
+up on different scales depending on the signs of their starts.
+
 The summary lists the scales, and writes each one-value estimate in the long form that shows
 its scale: `estimate ke = 0.08` is `ke ~ lognormal(median=0.08, sdlog=0)`, a lognormal that
 does not vary. The long form can also be written, to choose the scale:
@@ -292,8 +298,10 @@ s                        0.0014579  0.0005952   40.8   (0.000655, 0.003245)
 ```
 
 −2LL is −2 times the sum of what is written, so constants left out of the formula are left out
-of −2LL. A written likelihood cannot be combined with `censor` (write the censored part into
-the formula) and is not available with `method laplace` yet.
+of −2LL. A written likelihood cannot be combined with `censor`, and it does not see the data's
+other columns (a BLQ flag, a limit, a weight), so the censored part cannot be written into it
+either: for censored measurements, use an error model with `censor`. A written likelihood is
+not available with `method laplace` yet.
 
 ## Priors
 

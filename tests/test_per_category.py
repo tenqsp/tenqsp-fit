@@ -233,3 +233,36 @@ def test_an_entry_varies_between_units_with_a_shared_spread(tmp_path, monkeypatc
     assert est["r[S].median"] == pytest.approx(0.5, rel=0.15)
     assert est["r[R].median"] == pytest.approx(0.1, rel=0.15)
     assert 0.08 < est["w"] < 0.4
+
+
+# ----------------------------------------------------------------------------- observables
+def test_an_observable_reading_a_parameter_per_category_does_not_stop_the_fit(folder):
+    """An observable (or definition) that reads r[strain] makes no difference to a fit that
+    links another observable."""
+    m = tq.Model.from_text(
+        GROWTH + "rate = r[strain]*B\nobservable growth = rate\nobservable both = B*r[strain]\n"
+    )
+    r = tf.fit(read(fit_text("estimate r[strain] = {S: 0.3, R: 0.3}\noptions progress=none"), m))
+    est = dict(zip(r.names, r.x, strict=True))
+    assert est["r[S]"] == pytest.approx(0.5, rel=1e-3)
+
+
+@pytest.mark.parametrize(
+    "lhs, message",
+    [
+        ("both", "the observable both has one value per category of 'strain'; a measurement is "
+         "one value. Write one observable per category in the model"),
+        ("cells", "(e.g. 'observable cells_S = B[strain=S]')"),
+        ("log10(cells)", "the observable cells has one value per category"),
+        ("cells[S]", "the left side of observe is a formula of the model's observables; an "
+         "observable cannot be sliced there. Write one observable per category"),
+        ("cells[strain=S]", "an observable cannot be sliced there"),
+        ("bact[S]", "cannot be sliced there. Write an observable with one value in the model"),
+    ],
+)  # fmt: skip
+def test_an_observable_per_category_is_refused_at_observe(growth, lhs, message):
+    m = tq.Model.from_text(GROWTH + "observable both = B*r[strain]\nobservable cells = B\n")
+    with pytest.raises(ValueError) as e:
+        tf.Problem(m).observe(lhs, "DV")
+    assert message in str(e.value)
+    tf.Problem(m).observe("bact", "DV")  # one value: accepted

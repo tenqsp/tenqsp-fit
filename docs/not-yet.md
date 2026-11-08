@@ -9,6 +9,7 @@ something else.
 | Not yet | Instead, for now |
 |---|---|
 | FO, SAEM, importance sampling (NONMEM's `METHOD=0`, `SAEM`, `IMP`) | [`laplace`](methods/laplace.md) (FOCE-I), or [`nuts`](methods/nuts.md) |
+| a written likelihood that reads data columns (a BLQ flag, a limit, a weight), so it cannot hold the censored part | an error model with `censor` for censored measurements |
 | a written likelihood (`likelihood` lines) with parameters that vary between units | an error model; a written likelihood works with [`optimize`](methods/optimize.md), and with [`nuts`](methods/nuts.md) when no parameter varies between units |
 | a profile likelihood after `nuts` | not needed: the posterior gives each quantity's interval |
 | the centred parameterisation under `nuts` | the non-centred one, always (each varying parameter from a standard-normal score) |
