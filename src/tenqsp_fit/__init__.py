@@ -34,7 +34,7 @@ from .results import prior_predictive
 from .text import load
 from .units import Observations, Unit
 
-__version__ = "0.2.0"
+__version__ = "0.2.1.dev0"
 
 __all__ = [
     "__version__",
