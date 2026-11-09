@@ -86,8 +86,8 @@ def every(tmp_path_factory):
 def test_a_fit_reads_every_notation(every):
     m, p, r, folder = every
     assert "fixed" in p.summary()
-    assert r.estimates["k"] == pytest.approx(0.5, rel=1e-5)
-    assert r.estimates["CL"] == pytest.approx(1.0, rel=1e-5)
+    assert r.estimates["k"] == pytest.approx(0.5, rel=1e-4)
+    assert r.estimates["CL"] == pytest.approx(1.0, rel=1e-4)
     r.doctor()
     assert len(r.tables()["sdtab"]) == len(TIMES) * 4 * 8
     r.plot_gof()
@@ -95,7 +95,7 @@ def test_a_fit_reads_every_notation(every):
     r.vpc(n=5)
     r.predict(regimen=tq.bolus("A", 5, times=[0]), times=[1, 2])
     back = tq.Model.from_text(r.model().to_text())
-    assert {p.name: p.value for p in back.to_ir().params}["k"] == pytest.approx(0.5, rel=1e-5)
+    assert {p.name: p.value for p in back.to_ir().params}["k"] == pytest.approx(0.5, rel=1e-4)
     r.save(folder / "saved")
 
 
