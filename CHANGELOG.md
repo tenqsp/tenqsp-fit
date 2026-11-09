@@ -20,6 +20,11 @@ versioning; `0.x` releases may change the API.
 - A model whose formulas use the model's own notation, such as a field at a boundary
   (`Psen = Pdl(w=1)`, a transit delay), could not be fitted: building the units, the
   summary, and fixing or estimating a name the model defines all stopped at that formula.
+  A test now fits a model using every notation TenQSP's formulas allow.
+- `result.model()` after a population fit (method laplace) failed; it now writes the model
+  with each varying parameter at its typical value.
+- Estimating a named total or slice of the model's fields (`B_tot = sum_s(B)`) is refused
+  with a message saying what it is, as for the model's other named formulas.
 
 ## [0.2.0] — 2026-11-09
 

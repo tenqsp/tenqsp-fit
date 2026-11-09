@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import pytest
+import tenqsp as tq
 from scipy.optimize import minimize
 from scipy.stats import multivariate_normal, norm, weibull_min
 
@@ -302,3 +303,15 @@ def test_a_coefficient_that_does_not_vary_takes_any_sign(tmp_path):
     assert abs(r1.estimates["beta"] - r0.estimates["beta"]) < 1e-3
     ind = r1.individual()
     assert {"A_ref", "A"} <= set(ind.columns)
+
+
+def test_the_fitted_model_holds_the_typical_values(tmp_path):
+    """``result.model()`` after method laplace: each varying parameter at its typical value
+    (normal score 0, here the mean), the others at their estimates; written and read back."""
+    r = tf.fit(lin_problem(tmp_path, correlate=False))
+    e = r.estimates
+    back = tq.Model.from_text(r.model().to_text()).to_ir()
+    values = {p.name: p.value for p in back.params}
+    assert values["A"] == pytest.approx(e["A.mean"], rel=1e-12)
+    assert values["B"] == pytest.approx(e["B.mean"], rel=1e-12)
+    assert values["k"] == pytest.approx(e["k"], rel=1e-12)

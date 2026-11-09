@@ -236,6 +236,7 @@ class _ModelInfo:
         self.axes = [a.name for a in ir.axes]
         self.labels = {a.name: a.labels for a in ir.axes if a.type == "categorical"}
         self.definitions = {d.name: d.expr for d in ir.definitions}
+        self.totals = {i.name for i in ir.integrals}  # named totals and slices of fields
         self.compartments = [c.name for c in ir.compartments]
         self.fields = [f.name for f in ir.fields]
         self.field_axes = {f.name: tuple(f.axes) for f in ir.fields}
@@ -743,6 +744,11 @@ class Problem:
             not isinstance(name, str) or not _NAME.fullmatch(name) or keyword.iskeyword(name)
         ):
             raise ValueError(f"{what}: '{name}' is not a name.")
+        if name in m.totals:
+            raise ValueError(
+                f"{what} {name}: {name} is not a parameter but a value the model takes from its "
+                "fields (a total, or a slice); the fit sets parameters only."
+            )
         if name in m.definitions:
             ps = sorted(m.param_names(m.definitions[name]))
             instead = f"; {what} {' or '.join(ps)} instead" if ps else ""

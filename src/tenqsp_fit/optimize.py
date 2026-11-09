@@ -428,8 +428,9 @@ class Result:
 
         import tenqsp as tq
 
-        obj, m = self.objective, self.problem.model
-        env = obj._unit_values(jnp.asarray(self.x, dtype=jnp.float64))
+        m = self.problem.model
+        obj = getattr(self.objective, "_cond", self.objective)  # laplace: the unit-level one
+        env = obj._unit_values(jnp.asarray(self.x, dtype=jnp.float64))  # scores 0: typical
         info = self.problem._m
         names = [n for n in info.params if n in env and (n in obj._wrt or n in obj._fixed)]
         ids = [u.id for u in obj._units]
