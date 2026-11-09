@@ -12,6 +12,8 @@ validation:
 exclude_docs: |
   /examples/*.py
   /examples/theoph_run/
+  /tutorials/*.py
+  /tutorials/__pycache__/
 
 theme:
   name: material
@@ -47,6 +49,9 @@ extra_javascript:
 
 plugins:
   - search
+  - mkdocs-jupyter:
+      execute: false
+      include: ["tutorials/*.ipynb"]
 
 nav:
   - Start here:
@@ -62,6 +67,9 @@ nav:
       - The doctor and the passport: guide/doctor.md
       - In Python: guide/python.md
       - For NONMEM users: guide/nonmem.md
+  - Tutorials:
+      - tutorials/index.md
+      - 1 Theophylline: tutorials/01_theophylline.ipynb
   - Methods:
       - optimize: methods/optimize.md
       - laplace: methods/laplace.md
