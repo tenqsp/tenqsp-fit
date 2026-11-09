@@ -23,6 +23,7 @@ __all__ = ["Entry", "Table", "entry_name", "formula", "merged", "split", "to_ten
 
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 # a name with labels in brackets: k[S], V[liver, tissue], k[strain]
+_NAME_RE = re.compile(_NAME)
 ENTRY = re.compile(rf"({_NAME})\s*\[\s*({_NAME}(?:\s*,\s*{_NAME})*)\s*\]")
 
 
@@ -143,7 +144,15 @@ class Formula:
             self._token[token] = entry_name(m.group(1), labels)
             return token
 
-        self._f = tq.formula(ENTRY.sub(sub, text))
+        # an entry read by label in a model (TenQSP's V['spleen'], the notation's
+        # V[organ=spleen]) is the entry V[spleen]; a label that is not one word stands for
+        # the whole table
+        text_ = re.sub(
+            r"'([^']*)'|\"([^\"]*)\"",
+            lambda m: lab if _NAME_RE.fullmatch(lab := m.group(1) or m.group(2) or "") else "_",
+            text,
+        )
+        self._f = tq.formula(ENTRY.sub(sub, text_))
         self._name = {v: k for k, v in self._token.items()}
 
     @property

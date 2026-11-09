@@ -248,3 +248,42 @@ def test_waterfall_without_a_finished_start():
     r.starts = pd.DataFrame({"-2LL": [np.nan]})
     with pytest.raises(ValueError, match="no start ended with a finite -2LL"):
         r.plot_waterfall()
+
+
+def _scales_of(p):
+    """A result-like object with the problem's names and estimation scales (no fit needed)."""
+    from tenqsp_fit.optimize import scales
+
+    names, x0, bounds = p._starts()
+    return SimpleNamespace(names=names, scales=scales(names, x0, bounds, p._kinds(names)),
+                           problem=p)  # fmt: skip
+
+
+def test_a_quantity_held_above_zero_by_its_start_is_noted(tmp_path):
+    """Offsets with one prior: those with a positive start are on the log scale (held above 0),
+    those with a negative start are not; the doctor names the held ones."""
+    shared = "prior e1 ~ normal(mean=0, sd=0.3)\nprior e2 ~ normal(mean=0, sd=0.3)\n"
+    shared += "prior e3 ~ normal(mean=0, sd=0.3)\nke = ke0*exp(e1 + e2 + e3)\n"
+    p = problem(tmp_path, estimate="ka = 1, CL = 0.05, ke0 = 0.1, e1 = 0.2, e2 = -0.1, e3 = 0.1",
+                extra=shared)  # fmt: skip
+    (f,) = Dr._scales(_scales_of(p))
+    assert f.severity == "note" and f.evidence == {"held above 0": ["e1", "e3"],
+                                                    "may be negative": ["e2"]}  # fmt: skip
+    assert "e1 and e3 are estimated on the log scale" in f.message
+    assert "e2, with the same prior normal(mean=0, sd=0.3), is estimated as is" in f.message
+    assert "in (-1, 1)" in f.remedy
+    # all positive: the prior's weight below 0 says it
+    p = problem(tmp_path, estimate="ka = 1, CL = 0.05, ke0 = 0.1, e1 = 0.2, e2 = 0.1, e3 = 0.1",
+                extra=shared)  # fmt: skip
+    (f,) = Dr._scales(_scales_of(p))
+    assert "puts 50% of its weight below 0" in f.message
+    # bounds spanning zero: nothing to note
+    fixed = "e1 = 0.2 in (-1, 1), e2 = -0.1 in (-1, 1), e3 = 0.1 in (-1, 1)"
+    p = problem(tmp_path, estimate=f"ka = 1, CL = 0.05, ke0 = 0.1, {fixed}", extra=shared)
+    assert Dr._scales(_scales_of(p)) == []
+
+
+def test_a_positive_quantity_with_a_normal_prior_is_not_noted(tmp_path):
+    """A rate with prior normal(mean=0.05, sd=0.01): almost no weight below 0, no note."""
+    p = problem(tmp_path, extra="prior CL ~ normal(mean=0.05, sd=0.01)\n")
+    assert Dr._scales(_scales_of(p)) == []

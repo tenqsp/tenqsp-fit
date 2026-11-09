@@ -608,7 +608,7 @@ def _cut(level: float, result=None) -> tuple[float, str]:
     problem = result.problem
     if problem._likelihoods:
         return large
-    errors = {f"{e.lhs}.{q}" for e in problem._errors for q in e.model.quantities}
+    errors = problem._error_names()
     if not any(n in errors for n in result.names):
         return large
     n = int(result.n_observations) - int(getattr(result, "n_censored", 0))
@@ -980,7 +980,8 @@ def run_record(result, text: str | None = None, data_bytes: bytes | None = None)
 
 def save(result, folder) -> Path:
     """Everything a run gives, in one folder: ``problem.tq`` (model and fit text),
-    ``data.csv`` (the data as read), ``estimates.csv`` (the table), ``starts.csv``,
+    ``data.csv`` (the data as read), ``estimates.csv`` (the table), ``fitted_model.tq`` (the
+    model with the fitted values in, ``result.model()``), ``starts.csv``,
     ``trace.csv``, ``sdtab.csv``, ``patab.csv``, ``result.txt`` (as printed), plots (trace,
     goodness of fit, each unit), ``passport.md`` and ``passport.json``, and ``run.json``
     (versions, hashes of the model, fit and data texts, options, status, -2LL, time)."""
@@ -994,6 +995,10 @@ def save(result, folder) -> Path:
         data_bytes = p._data.table.to_csv(index=False).encode()
         (folder / "data.csv").write_bytes(data_bytes)
     result.table().to_csv(folder / "estimates.csv", index=False)
+    try:  # the model with the fitted values in (not when they differ between units)
+        (folder / "fitted_model.tq").write_text(result.model().to_text(), encoding="utf-8")
+    except (ValueError, AttributeError):
+        pass
     result.starts.to_csv(folder / "starts.csv", index=False)
     result.trace.to_csv(folder / "trace.csv", index=False)
     if getattr(result, "draws", None) is not None:  # NUTS: every draw, and each chain's checks

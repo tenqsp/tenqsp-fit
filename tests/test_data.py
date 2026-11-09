@@ -175,6 +175,15 @@ def test_inconsistent_evid_mdv_amt_dv():
     assert "row 4 has EVID 0 (a measurement) but no DV" in msg
 
 
+def test_a_dose_of_zero_is_a_dose_a_missing_amount_is_not():
+    """AMT 0 on a dose row is a placebo record (NONMEM allows it); a missing AMT is refused."""
+    df = nonmem(n=2)
+    df.loc[0, "AMT"] = 0.0
+    problem(df).check()
+    df.loc[0, "AMT"] = np.nan
+    assert "row 1 has EVID 1 (a dose) but no amount (AMT)" in problems(problem(df))
+
+
 def test_missing_and_negative_times_and_text_in_numbers():
     df = nonmem(n=1)
     df["TIME"] = df["TIME"].astype(object)

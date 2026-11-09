@@ -135,7 +135,7 @@ def test_fit_reaches_the_maximum_likelihood(tmp_path):
     # standard errors against the Hessian of the exact -2LL (central differences)
     t = r.table()
     assert list(t.columns) == ["quantity", "estimate", "SE", "RSE %", "CI 2.5 %", "CI 97.5 %",
-                               "also"]  # fmt: skip
+                               "also", "bound"]  # fmt: skip
     h, E = 1e-3, np.eye(7) * 1e-3
 
     def d2(i, j):

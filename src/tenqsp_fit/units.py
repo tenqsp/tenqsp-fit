@@ -277,7 +277,9 @@ def row_problems(df: pd.DataFrame, unit: str | None, add, origin, censored=None)
                     f"{rows_text(r)} {_have(r)} EVID 0 (a measurement) and a dose amount "
                     "(AMT); a dose has EVID 1. Give the dose and the measurement on separate rows.",
                 )
-            r = np.flatnonzero(((evid == 1) & (amt == 0)).to_numpy())
+            # a missing amount is refused; an amount of 0 is a dose of 0 (a placebo record)
+            given = pd.to_numeric(df["AMT"], errors="coerce").notna()
+            r = np.flatnonzero(((evid == 1) & ~given).to_numpy())
             if len(r):
                 add(origin, f"{rows_text(r)} {_have(r)} EVID 1 (a dose) but no amount (AMT).")
         if "MDV" in cols:

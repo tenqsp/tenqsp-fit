@@ -95,6 +95,7 @@ near zero  kept above 0 by a smooth floor at 1e-6 (the solver's atol): f in conc
 | `$OMEGA ... SAME` (one variance for several ETAs) | name the spread and estimate it once: `sdlog=w` in each, `estimate w = 0.3` |
 | `FIX` | `fix(0.3)` inside a distribution or error model, or `fix V = 32` |
 | `$SIGMA`, `EPS` | `error conc ~ additive(a)`, `proportional(b)`, `combined(a, b)`, `power(b, k)`: the SD itself, not a variance |
+| `$SIGMA ... SAME` (one residual SD for several outputs) | name it and estimate it once: `error conc ~ additive(s)` and `error conc2 ~ additive(s)`, `estimate s = 0.2` |
 | BLQ, M3 | `censor conc below 0.05`; with a flag and a limit column, `censor conc where BLQ == 1 below LLOQ` |
 | BLQ, M1 (rows dropped) | `ignore DV where BLQ == 1`; the passport lists the rows left out |
 | an exponential error on log-transformed data (`Y = LOG(F) + EPS(1)`) | a column of the logs, `observe log(conc) = LNDV`, and `error log(conc) ~ additive(sd)` |

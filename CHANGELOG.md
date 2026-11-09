@@ -12,6 +12,22 @@ versioning; `0.x` releases may change the API.
   axes). Entries take bounds, priors, distributions between units and correlations, and
   formulas of the fit set them (`k = k_all` gives every category one estimate;
   `k[R] = k[S]*f`). The results, the doctor and the tables name entries as `k[R]`.
+- **Models that read a table's entry by label** (TenQSP 0.8.0's `Vvas[organ=spleen]`,
+  `iKp[phage, organ=liver]`): estimating or fixing `Vvas[spleen]` reaches every place the model
+  reads it.
+- **One residual SD for several links** (NONMEM's `SAME` for residual error): an error
+  model's number may be a name estimated or fixed once, `error conc ~ additive(s)` and
+  `error conc2 ~ additive(s)` with `estimate s = 0.2`; in Python `tf.additive("s")`. Any part
+  of `combined` and `power` can be shared this way.
+- **Estimates at a bound** are marked in `result.table()` (column `bound`, and "at its lower
+  bound" in the printout). They have no standard error or interval, and the other quantities'
+  standard errors are computed with them held at the bound.
+- **`result.model()`**: the TenQSP model with the fitted values in (estimated, fixed and
+  formula-set parameters, table entries included), written at full precision by
+  `.to_text()`; `result.save()` writes it as `fitted_model.tq`.
+- **A doctor note on scales:** a quantity held above 0 by the log scale only because its start
+  was positive is named when its written prior puts weight below 0, or when quantities that
+  share its prior (or its table) were estimated as they are.
 
 ### Changed
 - **Shorter steps for `method optimize` and profiles:** one step moves no quantity by more than
@@ -25,6 +41,9 @@ versioning; `0.x` releases may change the API.
   note, not a warning.
 
 ### Fixed
+- A model parameter declared without a value (`param k`, `param k[s]`), its start given by the
+  fit, made `tf.objective` and `tf.fit` fail with "No value for k".
+- A dose row with `AMT` 0 (a placebo record) was refused as having no amount.
 - `k = k_all` for a parameter per category was accepted when read and failed when the fit
   started; it now sets every category.
 - A model with an observable or a named formula that reads a parameter per category
@@ -35,8 +54,10 @@ versioning; `0.x` releases may change the API.
   to be accepted and the fit then failed inside the library. `observe conc[phage=p1]` says
   that an observable cannot be sliced there (it suggested `==`).
 - The docs said to write the censored part of the data into a written likelihood, which cannot
-  read the data's columns; they now say to use an error model with `censor`. The estimates
-  chapter says that a quantity which may be negative needs bounds spanning zero.
+  read the data's columns; they now say to use an error model with `censor`, and so does the
+  message for a written likelihood given with `censor`. The estimates
+  chapter says that a quantity which may be negative needs bounds spanning zero, and what an
+  additive error on a log10 link means (lognormal measurements; the SD on the log10 scale).
 
 ## [0.1.0] — first release
 

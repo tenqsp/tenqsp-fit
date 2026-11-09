@@ -368,3 +368,137 @@ def test_only_links_that_need_it_floor_their_observables(data_file):
     g = np.asarray(shifted.predictions(shifted.x0)["conc - 50"])
     assert (g < 0).any()
     np.testing.assert_allclose(g, f - 50, rtol=1e-12)
+
+
+# ----------------------------------------------------------------------------- a shared SD
+TWO = PK + "observable conc_late = centr*ke/CL\n"
+SPLIT = "observe conc = DV where TIME < 3\nobserve conc_late = DV where TIME >= 3\n"
+
+
+@pytest.mark.parametrize("declare", ["estimate s = 0.3", "fix s = 0.3"])
+def test_links_naming_one_sd_share_it(data_file, declare):
+    """Two links whose error models name s: one SD for both, as one link with additive(0.3)
+    (the closed form over all 18 measurements); s is one estimated quantity, or held."""
+    fit = SPLIT + f"estimate ka = 1.4, CL = 0.05, ke = 0.07\n{declare}\n"
+    fit += "error conc ~ additive(s)\nerror conc_late ~ additive(s)"
+    obj = tf.objective(make(data_file, fit, model=TWO))
+    assert obj.names == (("ka", "CL", "ke", "s") if declare.startswith("estimate")
+                         else ("ka", "CL", "ke"))  # fmt: skip
+    dv, f = predictions(obj.x0[:3])
+    np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, 0.3), rtol=1e-8)
+    if declare.startswith("estimate"):  # d(-2LL)/ds: sum over both links
+        x = jnp.asarray(obj.x0)
+        r2 = np.sum((dv - f) ** 2)
+        np.testing.assert_allclose(float(jax.grad(obj)(x)[3]), -2 * r2 / 0.3**3 + 36 / 0.3,
+                                   rtol=1e-7)  # fmt: skip
+
+
+def test_a_shared_sd_beside_its_own(data_file):
+    """combined(a, b) with b shared by name and a per link: three SD quantities."""
+    fit = SPLIT + "estimate ka = 1.4, CL = 0.05, ke = 0.07, b = 0.2\n"
+    fit += "error conc ~ combined(0.3, b)\nerror conc_late ~ combined(0.4, b)"
+    obj = tf.objective(make(data_file, fit, model=TWO))
+    assert obj.names == ("ka", "CL", "ke", "b", "conc.additive", "conc_late.additive")
+    dv, f = predictions(obj.x0[:3])
+    a = np.where(table().TIME < 3, 0.3, 0.4)
+    sd = np.sqrt(a**2 + (0.2 * f) ** 2)
+    np.testing.assert_allclose(float(obj(obj.x0)), hand_normal(dv, f, sd), rtol=1e-8)
+
+
+# ----------------------------------------------------------------------------- partial links
+BP = """model bp
+param g = 0.5, kp = 0.2, k = 1e-7
+d_t(B) = g*B - k*B*P
+d_t(P) = -kp*P
+B(0) = 1e5
+observable bact = B
+observable phage = P
+"""
+
+
+def test_a_unit_without_measurements_on_a_link(tmp_path):
+    """A control unit (no phage dosed, P = 0 throughout) measured for bacteria only, one of
+    its bacteria counts censored at its own limit: its phage terms are 0, every term and the
+    gradient are finite, and the censored count is the one row."""
+    rows = []
+    for i, dose in ((1, 1e6), (2, 0.0)):
+        rows.append(dict(ID=i, TIME=0, AMT=dose, DV=np.nan, EVID=1, DVID=0, BLQ=0, LLOQ=np.nan))
+        for t in (1, 2, 4):
+            rows.append(dict(ID=i, TIME=t, AMT=np.nan, DV=5 + 0.2 * t, EVID=0, DVID=1,
+                             BLQ=int(i == 2 and t == 1), LLOQ=5.5))  # fmt: skip
+            if dose:
+                rows.append(dict(ID=i, TIME=t, AMT=np.nan, DV=6 - 0.1 * t, EVID=0, DVID=2,
+                                 BLQ=0, LLOQ=np.nan))  # fmt: skip
+    f = tmp_path / "bp.csv"
+    pd.DataFrame(rows).to_csv(f, index=False, na_rep=".")
+    obj = tf.objective(tf.Problem.from_text(
+        BP + f'fit bp\ndata "{f}"\nunit ID\ndoses into P\n'
+        "observe log10(bact) = DV where DVID == 1\nobserve log10(phage) = DV where DVID == 2\n"
+        "censor log10(bact) where BLQ == 1 below LLOQ\n"
+        "estimate g = 0.4, kp = 0.3\nerror log10(bact) ~ additive(0.3)\n"
+        "error log10(phage) ~ additive(0.3)\nmethod optimize\n" + TIGHT
+    ))  # fmt: skip
+    x = jnp.asarray(obj.x0)
+    terms = obj.terms(x)
+    assert np.all(np.asarray(terms["log10(phage)"])[1] == 0)  # unit 2: no phage rows
+    assert all(np.isfinite(np.asarray(t)).all() for t in terms.values())
+    assert np.isfinite(float(obj(x))) and np.isfinite(np.asarray(jax.grad(obj)(x))).all()
+    assert obj.n_observations == 9 and obj.n_censored == 1
+
+
+# ----------------------------------------------------------------------------- a PBPK-like gate
+GATE = """model gate
+axis phage categorical [p1, p2]
+axis organ categorical [o1, o2]
+field C(phage, organ)
+param k[phage, organ]
+param Dose[phage] = {p1: 1, p2: 1}
+d_t(C) = -k[phage, organ]*C
+C(0) = Dose[phage]
+observable c11 = C[phage=p1, organ=o1]
+observable c12 = C[phage=p1, organ=o2]
+observable c21 = C[phage=p2, organ=o1]
+observable c22 = C[phage=p2, organ=o2]
+"""
+
+
+def test_entries_shared_sds_doses_from_a_column_and_m3_against_the_closed_form(tmp_path):
+    """The features of a PBPK gate together: entries of a two-axis table without values in
+    the model, estimated, fixed and tied by formulas; the dose read from a data column into a
+    table entry; M3 at a limit per sample; one SD per organ shared by the two phages. -2LL
+    against the closed form C = Dose exp(-k t)."""
+    k = {"11": 0.5, "12": 0.2, "21": 0.3, "22": 0.2}  # k[p2, o2] = k[p1, o2] (a tie)
+    rng = np.random.default_rng(5)
+    rows = []
+    for i, dose in ((1, 1e6), (2, 3e6)):
+        for t in (1.0, 2.0, 6.0):
+            for pair in k:
+                y = np.log10(dose * np.exp(-k[pair] * t)) + 0.2 * rng.normal()
+                lloq = 5.0 + 0.1 * i
+                rows.append(dict(ID=i, TIME=t, DVID=f"c{pair}", LDV=max(y, lloq),
+                                 BLQ=int(y < lloq), LLOQ=lloq, DAMT=dose))  # fmt: skip
+    df = pd.DataFrame(rows)
+    assert df.BLQ.sum() >= 2
+    f = tmp_path / "gate.csv"
+    df.to_csv(f, index=False)
+    fit = f'fit gate\ndata "{f}"\nunit ID\n'
+    for pair in k:
+        fit += f'observe log10(c{pair}) = LDV where DVID == "c{pair}"\n'
+        fit += f"censor log10(c{pair}) where BLQ == 1 below LLOQ\n"
+    fit += "Dose[p1] = DAMT\nDose[p2] = DAMT\n"
+    fit += "estimate k[p1, o1] = 0.5, k[p1, o2] = 0.2\nfix k[p2, o1] = 0.3\nk[p2, o2] = k[p1, o2]\n"
+    fit += "estimate s1 = 0.2, s2 = 0.25\n"
+    for pair in k:
+        fit += f"error log10(c{pair}) ~ additive(s{pair[1]})\n"
+    obj = tf.objective(tf.Problem.from_text(GATE + fit + "method optimize\n" + TIGHT))
+    assert obj.names == ("k[p1, o1]", "k[p1, o2]", "s1", "s2")
+    hand = 0.0
+    for r in df.itertuples():
+        pred = np.log10(r.DAMT) - k[r.DVID[1:]] * r.TIME / np.log(10)
+        sd = 0.2 if r.DVID[2] == "1" else 0.25
+        if r.BLQ:
+            hand += -2 * norm.logcdf((r.LLOQ - pred) / sd)
+        else:
+            hand += ((r.LDV - pred) / sd) ** 2 + 2 * np.log(sd) + math.log(2 * math.pi)
+    np.testing.assert_allclose(float(obj(obj.x0)), hand, rtol=1e-8)
+    assert obj.n_censored == int(df.BLQ.sum())

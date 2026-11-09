@@ -266,3 +266,34 @@ def test_an_observable_per_category_is_refused_at_observe(growth, lhs, message):
         tf.Problem(m).observe(lhs, "DV")
     assert message in str(e.value)
     tf.Problem(m).observe("bact", "DV")  # one value: accepted
+
+
+def test_a_model_reading_entries_by_label(tmp_path):
+    """The model reads V[organ=spleen] (one entry) and K[phage, organ=liver] (one per phage):
+    estimating V[spleen] and K[p2, liver] reaches them; the other entries keep their values."""
+    model = tq.Model.from_text("""model s
+axis organ categorical [liver, spleen]
+axis phage categorical [p1, p2]
+param V[organ] = {liver: 2, spleen: 0.5}
+param K[phage, organ] = {p1: {liver: 1, spleen: 9}, p2: {liver: 0.5, spleen: 9}}
+field C(phage)
+d_t(C) = -K[phage, organ=liver]*C
+C(0) = 1
+observable y1 = V[organ=spleen]*C[phage=p1]
+observable y2 = C[phage=p2]
+""")
+    t = np.array([0.5, 1, 2, 4])
+    f = tmp_path / "s.csv"
+    df = pd.DataFrame({"TIME": np.r_[t, t], "DVID": [1] * 4 + [2] * 4,
+                       "DV": np.r_[0.8 * np.exp(-t), np.exp(-0.3 * t)]})  # fmt: skip
+    df.sort_values(["TIME", "DVID"]).to_csv(f, index=False)
+    r = tf.fit(tf.Problem.from_text(
+        f'fit s\ndata "{f}"\nobserve y1 = DV where DVID == 1\nobserve y2 = DV where DVID == 2\n'
+        "estimate V[spleen] = 0.5, K[p2, liver] = 0.5\nerror y1 ~ additive(fix(0.01))\n"
+        "error y2 ~ additive(fix(0.01))\nmethod optimize\noptions progress=none checks=quick\n",
+        model=model,
+    ))  # fmt: skip
+    assert abs(r.estimates["V[spleen]"] - 0.8) < 1e-4
+    assert abs(r.estimates["K[p2, liver]"] - 0.3) < 1e-4
+    text = r.model().to_text()
+    assert "liver: 1, spleen: 9" in text and "K[phage, organ=liver]" in text

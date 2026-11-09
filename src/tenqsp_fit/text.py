@@ -435,8 +435,12 @@ class _Reader:
         if kws:
             raise _Problem(f"error model: give the numbers in order, e.g. {name}(0.1, 0.2).")
         values = [_value(a, src, f"{name}") for a in args]
-        if any(isinstance(v, str) for v in values):
-            raise _Problem(f"{name}: the arguments are numbers (or fix(number)).")
+        if any(isinstance(v, str) and not v.isidentifier() for v in values):
+            raise _Problem(
+                f"{name}: an argument is a number, fix(number) or the name of an estimated "
+                f"or fixed quantity (e.g. {name}(s_shared) with estimate s_shared = 0.1), "
+                "not a formula."
+            )
         self.p.error(lhs, make_error(name, values))
 
     def st_likelihood(self, rest: str, st: _Statement) -> None:

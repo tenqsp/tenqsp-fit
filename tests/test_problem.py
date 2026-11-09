@@ -360,7 +360,7 @@ def test_estimate_checks():
         p.estimate("ka", 2.0, bounds=(0, 1))
     with pytest.raises(ValueError, match="state or an observable"):
         p.estimate("depot", 1.0)
-    with pytest.raises(ValueError, match="arrives in tenqsp-fit 0.2"):
+    with pytest.raises(ValueError, match="arrives in a later release"):
         p.estimate("CL", tf.gamma(mean=1, cv=0.5))
     with pytest.raises(ValueError, match="between -1 and 1"):
         p.correlate("ka", "CL", start=1.5)
@@ -596,3 +596,71 @@ def test_a_dose_column_time_below_0_is_refused():
 def test_load_names_a_problem_from_any_file_name(folder):
     (folder / "pk-pop v2.tq").write_text(PK + FIT.replace("fit pk_pop", "fit"))
     assert tf.load(folder / "pk-pop v2.tq").name == "pk_pop_v2"
+
+
+# ----------------------------------------------------------------------------- a shared SD
+TWO_LINKS = """
+fit pk_pop
+data "pk.csv"
+unit ID
+doses into depot
+observe conc = DV where TIME < 2
+observe conc2 = DV where TIME >= 2
+estimate ka = 1.5, CL = 0.04, ke = 0.08
+estimate s = 0.5
+error conc ~ additive(s)
+error conc2 ~ proportional(fix(0.1))
+method optimize
+"""
+
+
+def test_a_shared_sd_reads_the_same_in_text_and_python(folder, monkeypatch):
+    monkeypatch.chdir(folder)
+    text = TWO_LINKS.replace("proportional(fix(0.1))", "additive(s)")
+    m = tq.Model.from_text(PK + "observable conc2 = centr*ke/CL\n")
+    p = tf.Problem.from_text(text, model=m)
+    assert p.estimated() == ["ka", "CL", "ke", "s"]
+    assert "error conc ~ additive(s)" in p.to_text()
+    q = tf.Problem(m, name="pk_pop")
+    q.data("pk.csv")
+    q.unit("ID")
+    q.doses(into="depot")
+    q.observe("conc", "DV", where="TIME < 2")
+    q.observe("conc2", "DV", where="TIME >= 2")
+    q.estimate("ka", 1.5)
+    q.estimate("CL", 0.04)
+    q.estimate("ke", 0.08)
+    q.estimate("s", 0.5)
+    q.error("conc", tf.additive("s"))
+    q.error("conc2", tf.additive("s"))
+    q.method("optimize")
+    assert q == p
+    p.check()
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        (("estimate s = 0.5\n", ""), r"'s' is not declared; add estimate s = <start>"),
+        (
+            ("estimate s = 0.5", "estimate s ~ lognormal(median=0.5, sdlog=0.3)"),
+            r"'s' varies between units; the additive part",
+        ),
+        (("additive(s)", "additive(ke)"), r"'ke' is a parameter of the model"),
+        (("estimate s = 0.5", "estimate s = 0.5 in (-1, 1)"), r"must be > 0; give 's' a positive"),
+        (("estimate s = 0.5", "fix s = -0.5"), r"must be > 0; give 's' a positive value"),
+    ],
+)
+def test_a_named_sd_that_cannot_be_used(folder, monkeypatch, change, message):
+    monkeypatch.chdir(folder)
+    m = tq.Model.from_text(PK + "observable conc2 = centr*ke/CL\n")
+    p = tf.Problem.from_text(TWO_LINKS.replace(*change), model=m)
+    with pytest.raises(tf.ProblemError, match=message):
+        p.check()
+
+
+def test_an_error_model_argument_is_not_a_formula(folder, monkeypatch):
+    monkeypatch.chdir(folder)
+    m = tq.Model.from_text(PK + "observable conc2 = centr*ke/CL\n")
+    with pytest.raises(tf.FitTextError, match=r"name of an estimated or fixed quantity"):
+        tf.Problem.from_text(TWO_LINKS.replace("additive(s)", "additive(2*s)"), model=m)

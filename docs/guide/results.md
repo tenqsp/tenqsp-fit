@@ -64,9 +64,16 @@ not counted).
 | `SE` | the standard error, from the curvature of −2LL at the estimates (NONMEM's covariance step, the R matrix) |
 | `RSE %` | 100 × SE / \|estimate\| |
 | `95 % CI` | the 95 % interval, symmetric on the scale the quantity was estimated on: on the log scale for a positive quantity, so it stays positive and is not symmetric around the estimate |
-| `also` | a spread in its other usual forms: for a lognormal's `sdlog`, the CV and the variance (NONMEM's OMEGA) |
+| `also` | a spread in its other usual forms: for a lognormal's `sdlog`, the CV and the variance (NONMEM's OMEGA); `at its lower bound` for an estimate at a bound |
 
 The scale of each quantity is listed by `problem.summary()` (`scales`).
+
+**An estimate at a bound** written for it (`estimate k = 0.3 in (0.01, 0.4)`; within 1 % of
+the interval's width) has no standard error or interval: the curvature there does not describe
+it, and a likelihood-ratio test against a value on the bound does not follow the usual
+chi-square. The other quantities' standard errors are computed with it held at the bound, as
+if it were fixed there. The doctor warns about it. Report such an estimate as "at the bound",
+and use a [profile](#profile-likelihood) for what the data say about it.
 
 **Shrinkage** (with parameters that vary between units): 1 minus the SD of the units' normal
 scores, per varying parameter. Near 0, each unit's own values are informed by its own data;
@@ -83,7 +90,7 @@ RSE and interval columns are empty. A `note:` line under the table reports a sta
 | | What it is |
 |---|---|
 | `result.estimates` | `{name: value}` |
-| `result.table()` | the table above as a pandas DataFrame (columns `quantity`, `estimate`, `SE`, `RSE %`, `CI 2.5 %`, `CI 97.5 %`, `also`) |
+| `result.table()` | the table above as a pandas DataFrame (columns `quantity`, `estimate`, `SE`, `RSE %`, `CI 2.5 %`, `CI 97.5 %`, `also`, and `bound`: `lower`, `upper` or empty) |
 | `result.se`, `result.cov` | standard errors, and the covariance matrix of the estimates |
 | `result.corr` | the correlations of the estimates, one row and column per quantity (after `nuts`, over the draws); the passport adds the eigenvalues of this matrix, as NONMEM's `$COV PRINT=E` |
 | `result.m2ll`, `result.status` | −2LL and the status |
@@ -92,6 +99,7 @@ RSE and interval columns are empty. A `note:` line under the table reports a sta
 | `result.starts` | one row per start: its −2LL, steps, status, where it started and where it ended |
 | `result.trace` | every step of every start: start, iteration, −2LL and the values |
 | `result.doctor()` | the doctor's findings (`.table()` as a DataFrame) |
+| `result.model()` | the TenQSP model with the fitted values in (below) |
 
 ```python
 result.table()
@@ -338,6 +346,21 @@ is labelled approximate; after `nuts` it comes from the posterior draws. `pred.p
 conc from 0 to 48 (bolus 4 into depot at t = 0; bolus 4 into depot at t = 12; bolus 4 into depot at t = 24); approximate (from the standard errors), 200 draws; with a new unit's 90 % range
 ```
 
+## The fitted model
+
+`result.model()` is the TenQSP model with the values of the fit in: every model parameter the
+fit estimated, fixed or set by a formula (entries of a table included) holds its value at the
+estimates; the rest are as in the model. `.to_text()` writes it at full precision, so the file
+simulates the fitted curves without the fit:
+
+```python
+fitted = result.model()
+open("fitted.tq", "w").write(fitted.to_text())
+```
+
+A parameter that varies between units takes its typical value. When values differ between
+units (a covariate in a formula), name the unit: `result.model(unit=3)`.
+
 ## Save everything
 
 ```python
@@ -352,6 +375,7 @@ writes one folder:
 | `data.csv` | the data as read |
 | `result.txt` | the printout |
 | `estimates.csv` | `result.table()` |
+| `fitted_model.tq` | `result.model()`: the model with the fitted values in |
 | `starts.csv`, `trace.csv` | each start, every step |
 | `sdtab.csv`, `patab.csv` | the NONMEM-style tables |
 | `trace.png`, `gof.png`, `individual.png` | the path of the fit, goodness of fit, each unit; `waterfall.png` with several starts |
