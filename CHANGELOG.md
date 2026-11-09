@@ -15,7 +15,8 @@ versioning; `0.x` releases may change the API.
 
 ### Fixed
 - A model whose formulas use the model's own notation, such as a field at a boundary
-  (`Psen = Pdl(w=1)`), could not be fitted: building the units stopped at that formula.
+  (`Psen = Pdl(w=1)`, a transit delay), could not be fitted: building the units, the
+  summary, and fixing or estimating a name the model defines all stopped at that formula.
 
 ## [0.2.0] — 2026-11-09
 
