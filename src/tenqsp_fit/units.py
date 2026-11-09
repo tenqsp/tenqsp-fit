@@ -371,7 +371,7 @@ class Plan:
     """What ``build`` needs from the problem."""
 
     unit: str | None
-    doses: object  # the _Doses declaration, or None
+    doses: list  # the _Doses declarations (several only for doses given as columns)
     links: list  # (lhs, column, where) of each observe line
     ignored: list  # (column, where) of each ignore line
     censors: dict  # lhs key -> (limit: a number or a column, condition or None)
@@ -422,7 +422,7 @@ def build(df: pd.DataFrame, plan: Plan, add, origin_of) -> list[Unit]:
             continue  # no linked measurement: nothing to fit (reported in the summary)
         times = np.unique(np.concatenate([o.times for o in observations.values()]))
         cov = {c: _plain_value(df.loc[in_unit, c].dropna().iloc[0]) for c in plan.covariates}
-        if plan.doses is None:  # no doses line: the model's own doses (if any)
+        if not plan.doses:  # no doses line: the model's own doses (if any)
             sc = tq.Scenario(name=str(k), times=times)
         else:
             sc = tq.Scenario(name=str(k), regimen=regimens.get(k, tq.Regimen()), times=times)
@@ -437,15 +437,18 @@ def _plain_value(v):
 
 
 def _regimens(df, keys, order, plan, add, origin_of) -> dict:
-    d = plan.doses
-    if d is None:
+    if not plan.doses:
         return {}
-    if d.column is not None:
+    d = plan.doses[0]
+    if d.column is not None:  # one statement per place
         out = {}
         for k in order:
-            amount = df.loc[(keys == k).to_numpy(), d.column].dropna()
-            if len(amount):
-                out[k] = tq.bolus(d.into, float(amount.iloc[0]), times=[d.at])
+            unit = (keys == k).to_numpy()
+            for d in plan.doses:
+                amount = df.loc[unit, d.column].dropna()
+                if len(amount):
+                    reg = tq.bolus(d.into, float(amount.iloc[0]), times=[d.at])
+                    out[k] = out[k] + reg if k in out else reg
         return out
     rows = D.dose_rows(df)
     if not rows.any():
@@ -473,7 +476,7 @@ def _dose_time_problems(df, u: Unit, in_unit, time, plan, add, origin_of) -> Non
     doses = [(e["time"], e["target"]) for e in events(u.scenario) if e["kind"] == "bolus"]
     if not doses:
         return
-    dose_rows = np.flatnonzero(D.dose_rows(df) & in_unit) if plan.doses.column is None else []
+    dose_rows = np.flatnonzero(D.dose_rows(df) & in_unit) if plan.doses[0].column is None else []
     clash = []
     for lhs, o in u.observations.items():
         reads = set().union(*(plan.reads.get(n, set()) for n in tq.formula(lhs).names))

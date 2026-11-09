@@ -302,3 +302,19 @@ def test_the_run_record_has_the_versions_of_the_optimizers_and_nuts(pooled):
     assert {"tenqsp_fit", "tenqsp", "jax", "scipy", "optimistix", "numpyro",
             "arviz_stats"} <= set(versions)  # fmt: skip
     assert versions["tenqsp_fit"] == tf.__version__
+
+
+def test_vpc_at_other_solver_tolerances(pooled):
+    """``vpc(rtol=, atol=)``: the simulations at other tolerances (the title says so), no
+    rebuild; a looser tolerance moves the bands by far less than their width."""
+    base = pooled.vpc(n=50, seed=2)
+    loose = pooled.vpc(n=50, seed=2, rtol=1e-4, atol=1e-7)
+    assert "solver rtol 0.0001, atol 1e-07" in loose.figure._suptitle.get_text()
+    width = (base.table["sim p95"] - base.table["sim p5"]).to_numpy()
+    shift = np.abs(loose.table["sim p50"] - base.table["sim p50"]).to_numpy()
+    assert (shift < 0.05 * width).all()
+    tight = pooled.vpc(n=50, seed=2, rtol=1e-9)
+    np.testing.assert_allclose(tight.table["sim p50"], base.table["sim p50"], rtol=1e-4)
+    for bad in (0, 1.5, "1e-6", True):
+        with pytest.raises(ValueError, match="rtol is a number between 0 and 1"):
+            pooled.vpc(n=5, rtol=bad)

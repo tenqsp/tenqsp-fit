@@ -5,6 +5,18 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+### Added
+- **Doses into one element of a field** over categorical axes: `doses DAMT at t=2 into
+  Cpla[phage=mxp1001]`, and in the CMT form `doses CMT 1 into Cpla[phage=mxp1001]`. Doses
+  given as a column may take several `doses` lines, one per place (two phages given together).
+- **`result.vpc(rtol=, atol=)`**: the VPC's simulations at other solver tolerances than the
+  fit's, without a rebuild. A fit's tolerances set for the last digits of −2LL can make the
+  VPC far slower than it needs to be.
+
+### Fixed
+- A model whose formulas use the model's own notation, such as a field at a boundary
+  (`Psen = Pdl(w=1)`), could not be fitted: building the units stopped at that formula.
+
 ## [0.2.0] — 2026-11-09
 
 ### Added

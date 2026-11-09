@@ -14,6 +14,7 @@ can be kept.
 | `doses into depot` | `p.doses(into="depot")` |
 | `doses CMT 1 into depot, 2 into centr` | `p.doses(cmt={1: "depot", 2: "centr"})` |
 | `doses Dose at t=0 into depot` | `p.doses(column="Dose", at=0, into="depot")` |
+| `doses D1 at t=2 into Cpla[phage=a]` | `p.doses(column="D1", at=2, into="Cpla[phage=a]")`, once per line |
 | `observe conc = DV where CMT == 2` | `p.observe("conc", "DV", where="CMT == 2")` |
 | `ignore DV where DVID == 3` | `p.ignore("DV", where="DVID == 3")` |
 | `censor conc where BLQ == 1 below LLOQ` | `p.censor("conc", below="LLOQ", where="BLQ == 1")` |

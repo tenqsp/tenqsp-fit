@@ -38,6 +38,7 @@ from .errors import ProblemError, nearest
 __all__ = ["Problem"]
 
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SLICE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[([^\]]*)\])?\s*")  # C[axis=label]
 METHODS = {
     "optimize": ("one set of parameters: least squares or maximum likelihood", ()),
     "laplace": ("population, FOCE-I", ()),
@@ -237,6 +238,7 @@ class _ModelInfo:
         self.definitions = {d.name: d.expr for d in ir.definitions}
         self.compartments = [c.name for c in ir.compartments]
         self.fields = [f.name for f in ir.fields]
+        self.field_axes = {f.name: tuple(f.axes) for f in ir.fields}
         self.observables = [o.name for o in ir.observables]
         self.observable_exprs = {o.name: o.expr for o in ir.observables}
         self.n_states = sum(ir.state_count().values())
@@ -254,12 +256,13 @@ class _ModelInfo:
             seen.add(n)
             if n in states:
                 out.add(n)
-            # read with the fit's reader: a per-category parameter (Vo[organ]) is a name of
-            # its own here, where TenQSP's formula reader refuses it
+            # the names in the model's own formulas, by their spelling: these use the model's
+            # notation (a field at a boundary, Pdl(w=1); a table's entry, Vo[organ=liver]),
+            # which no formula reader of the fit's takes whole
             elif n in self.observable_exprs:
-                todo.extend(E.formula(self.observable_exprs[n]).names)
+                todo.extend(_NAME.findall(self.observable_exprs[n]))
             elif n in self.definitions:
-                todo.extend(E.formula(self.definitions[n]).names)
+                todo.extend(_NAME.findall(self.definitions[n]))
         return out
 
     def observable_axes(self, name: str) -> tuple[str, ...]:
@@ -338,7 +341,7 @@ class Problem:
         self._data: _Data | None = None
         self._unit: str | None = None
         self._unit_origin: str | None = None
-        self._doses: _Doses | None = None
+        self._doses: list[_Doses] = []  # several only for doses given as columns
         self._links: list[_Observe | _Ignore] = []
         self._params: list[_Estimate | _Fix] = []
         self._correlations: list[_Correlate] = []
@@ -387,24 +390,34 @@ class Problem:
     ) -> None:
         """Where the data's doses go: ``into="depot"`` (every dose row, AMT), ``cmt={1:
         "depot", 2: "centr"}`` (by the CMT column), or ``column="Dose", at=0, into="depot"``
-        (the dose as a column of the data, given once per unit at time ``at``)."""
-        if self._doses is not None:
-            raise ValueError("doses are declared twice; give one doses statement.")
+        (the dose as a column of the data, given once per unit at time ``at``). A place is a
+        compartment or one element of a field over categorical axes, ``"C[phage=a]"``. Doses
+        given as columns may take several statements, one per place."""
+        if self._doses and not (
+            column is not None and all(d.column is not None for d in self._doses)
+        ):
+            raise ValueError(
+                "doses are declared twice; give one doses statement (several only for doses "
+                "given as a column, one per place: doses DAMT at t=2 into C[phage=a])."
+            )
         if cmt is not None:
             if into is not None or column is not None or at is not None:
                 raise TypeError("doses: give cmt={...} alone, or into= (with column= and at=).")
             if not isinstance(cmt, dict) or not cmt:
                 raise TypeError("doses: cmt maps CMT numbers to places, e.g. {1: 'depot'}.")
+            places = {}
             for k, place in cmt.items():
                 _as_float(k, "doses: a CMT number")
-                self._dose_place(place)
-            self._doses = _Doses(
-                cmt={int(k) if float(k).is_integer() else k: v for k, v in cmt.items()}
-            )
+                places[k] = self._dose_place(place)
+            self._doses = [
+                _Doses(cmt={int(k) if float(k).is_integer() else k: v for k, v in places.items()})
+            ]
             return
         if into is None:
             raise TypeError("doses: say where the doses go: into='depot', or cmt={1: 'depot'}.")
-        self._dose_place(into)
+        into = self._dose_place(into)
+        if any(d.into == into for d in self._doses):
+            raise ValueError(f"doses into {into} are declared twice; give one per place.")
         if (column is None) != (at is None):
             raise TypeError("doses: a dose column needs its time: column='Dose', at=0.")
         if column is not None:
@@ -413,20 +426,56 @@ class Problem:
             at = _as_float(at, "doses: at")
             if at < 0:
                 raise ValueError(f"doses: at is 0 or later (the model starts at 0), got {at:g}.")
-        self._doses = _Doses(into=into, column=column, at=at)
+        self._doses.append(_Doses(into=into, column=column, at=at))
 
-    def _dose_place(self, place) -> None:
-        if place in self._m.compartments:
-            return
-        if place in self._m.fields:
+    def _dose_place(self, place) -> str:
+        """A place for doses, as written in the fit text: a compartment, or one element of a
+        field over categorical axes (``C[phage=a]``, every axis given)."""
+        m = _SLICE.fullmatch(place) if isinstance(place, str) else None
+        if m is None:
+            raise ValueError(f"doses: cannot read the place {place!r}; write a compartment, or "
+                             "one element of a field: C[phage=a].")  # fmt: skip
+        name, inside = m.group(1), m.group(2)
+        if name in self._m.compartments:
+            if inside is not None:
+                raise ValueError(f"doses: '{name}' is a compartment; only a field is sliced.")
+            return name
+        if name not in self._m.fields:
+            places = self._m.compartments + self._m.fields
             raise ValueError(
-                f"doses into the field '{place}' (with a shape over its axis) arrive in a later "
-                "release; doses go into compartments for now."
+                f"doses: the model has no compartment or field '{name}'.{nearest(name, places)}"
+                f" Compartments: {', '.join(self._m.compartments) or '(none)'}."
             )
-        raise ValueError(
-            f"doses: the model has no compartment '{place}'.{nearest(place, self._m.compartments)}"
-            f" Compartments: {', '.join(self._m.compartments) or '(none)'}."
-        )
+        axes = self._m.field_axes[name]
+        cont = [a for a in axes if a not in self._m.labels]
+        if cont:
+            raise ValueError(
+                f"doses into the field '{name}' over the continuous axis {cont[0]} (with a shape "
+                "over it) arrive in a later release; doses go into compartments and into "
+                "elements of fields over categorical axes."
+            )
+        example = ", ".join(f"{a}={self._m.labels[a][0]}" for a in axes)
+        given: dict[str, str] = {}
+        for part in filter(None, (x.strip() for x in (inside or "").split(","))):
+            a, eq, lab = (x.strip() for x in part.partition("="))
+            if not eq or a not in axes:
+                raise ValueError(f"doses into {name}: write the axis and its label, "
+                                 f"{name}[{example}]; its axes: {', '.join(axes)}.")  # fmt: skip
+            if a in given:
+                raise ValueError(f"doses into {name}: the axis {a} is given twice.")
+            if lab not in self._m.labels[a]:
+                raise ValueError(
+                    f"doses into {name}: the axis {a} has no label '{lab}'."
+                    f"{nearest(lab, self._m.labels[a])} Labels: {', '.join(self._m.labels[a])}."
+                )
+            given[a] = lab
+        missing = [a for a in axes if a not in given]
+        if missing:
+            raise ValueError(
+                f"doses into the field '{name}': say which element, every axis with its label "
+                f"({name}[{example}]); missing: {', '.join(missing)}."
+            )
+        return f"{name}[{', '.join(f'{a}={given[a]}' for a in axes)}]"
 
     def observe(self, observable: str, column: str = "DV", *, where: str | None = None) -> None:
         """Link an observable to the measurements in a data column: ``p.observe("conc",
@@ -1173,8 +1222,9 @@ class Problem:
                 self._censor_marked(df),
             )  # fmt: skip
             unit = self._unit if self._unit in columns else None
-            if self._doses is not None and self._doses.column is not None:
-                U.constant_problems(df, unit, self._doses.column, "the dose", add, self._doses)
+            for d in self._doses:
+                if d.column is not None:
+                    U.constant_problems(df, unit, d.column, "the dose", add, d)
             for c in self._covariates():
                 U.constant_problems(df, unit, c, "a covariate", add, self._data)
             out += self._link_problems(df, add)
@@ -1332,7 +1382,7 @@ class Problem:
         )
 
     def _build(self, add) -> list[U.Unit]:
-        origins = {"doses": self._doses, "data": self._data}
+        origins = {"doses": self._doses[0] if self._doses else None, "data": self._data}
         return U.build(self._data.table, self._plan(), add, lambda k: origins[k])
 
     def _outputs(self) -> tuple[str, ...]:
@@ -1461,7 +1511,7 @@ class Problem:
                 "linked": int(linked.sum()),
                 "left out": left_out,
                 "doses": int(dose.sum())
-                if not (self._doses and self._doses.column)
+                if not (self._doses and self._doses[0].column)
                 else sum(bool(U.events(u.scenario)) for u in units),
                 "neither": int((~obs & ~dose).sum()),
             },
@@ -1596,7 +1646,7 @@ class Problem:
     def _dose_problems(self, df: pd.DataFrame, add) -> list[str]:
         out: list[str] = []
         rows = D.dose_rows(df)
-        d = self._doses
+        d = self._doses[0] if self._doses else None
         if d is None:
             if rows.any():
                 lines = [
@@ -1620,12 +1670,13 @@ class Problem:
                 out.append("\n".join(lines))
             return out
         if d.column is not None:
-            if d.column not in df.columns:
-                add(
-                    d,
-                    f"doses: the data have no column '{d.column}'."
-                    f"{nearest(d.column, map(str, df.columns))}",
-                )
+            for d in self._doses:
+                if d.column not in df.columns:
+                    add(
+                        d,
+                        f"doses: the data have no column '{d.column}'."
+                        f"{nearest(d.column, map(str, df.columns))}",
+                    )
             if rows.any():
                 add(
                     d,
@@ -1666,7 +1717,11 @@ class Problem:
         if df is not None:
             obs, doses = D.observation_rows(df), D.dose_rows(df)
             src = f'"{self._data.source}"' if self._data.source else "a table given in Python"
-            n_doses = n_units if (self._doses and self._doses.column) else int(doses.sum())
+            n_doses = (
+                n_units * len(self._doses)
+                if (self._doses and self._doses[0].column)
+                else int(doses.sum())
+            )
             observes = [x for x in self._links if isinstance(x, _Observe)]
             # the measurements the links read (a wide table has no DV rows); else the DV rows
             n_obs = sum(int(self._rows_of(x, df).sum()) for x in observes) if observes else None
@@ -1714,15 +1769,16 @@ class Problem:
                         "links" if x is self._links[0] else "",
                         f"left out: {x.column} {where}   {n}",
                     )
-            d = self._doses
+            d = self._doses[0] if self._doses else None
             if d is None:
                 row("doses", "none")
             elif d.column is not None:
-                row(
-                    "doses",
-                    f"column {d.column} at t={_num(d.at)} -> {d.into}   "
-                    f"{n_units} doses (one per unit)",
-                )
+                for i, d in enumerate(self._doses):
+                    row(
+                        "doses" if i == 0 else "",
+                        f"column {d.column} at t={_num(d.at)} -> {d.into}   "
+                        f"{n_units} doses (one per unit)",
+                    )
             else:
                 ndose = int(D.dose_rows(df).sum())
                 to = (
@@ -1858,7 +1914,7 @@ class Problem:
                 lines.append(f'data "{self._data.source}"' + (f" with {cols}" if cols else ""))
         if self._unit is not None:
             lines.append(f"unit {self._unit}")
-        if (d := self._doses) is not None:
+        for d in self._doses:
             if d.cmt is not None:
                 lines.append(
                     "doses CMT " + ", ".join(f"{_arg(k)} into {v}" for k, v in d.cmt.items())
@@ -1936,7 +1992,7 @@ class Problem:
             self._m.hash,
             self._data,
             self._unit,
-            self._doses,
+            tuple(self._doses),
             self._links,
             self._params,
             self._correlations,
