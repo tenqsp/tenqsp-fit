@@ -11,7 +11,10 @@ versioning; `0.x` releases may change the API.
   `nls` and `nlme`); 2, a transit delay and absorption (what a sparse and a rich design
   determine; profile intervals against standard-error intervals over ten simulated studies);
   3, phenobarbital in newborns (covariates from sparse routine data, checked against
-  NONMEM's run of the same model; shrinkage).
+  NONMEM's run of the same model; shrinkage); 4, myelosuppression (a simulated
+  dose-ranging study, a prediction for a new dose, and the dose a virtual population of the
+  fitted model picks); 5, warfarin (checked against Monolix's fits; a sex effect that is a
+  weight effect).
 - **Example data:** phenobarbital (`nlme::Phenobarb`) and warfarin (the Monolix demo set),
   with `docs/examples/DATA.md` giving the source of every dataset.
 - **Doses into one element of a field** over categorical axes: `doses DAMT at t=2 into

@@ -72,6 +72,8 @@ nav:
       - 1 Theophylline: tutorials/01_theophylline.ipynb
       - 2 Transit delay and absorption: tutorials/02_transit_absorption.ipynb
       - 3 Phenobarbital in newborns: tutorials/03_phenobarbital.ipynb
+      - 4 Myelosuppression: tutorials/04_myelosuppression.ipynb
+      - 5 Warfarin: tutorials/05_warfarin.ipynb
   - Methods:
       - optimize: methods/optimize.md
       - laplace: methods/laplace.md
