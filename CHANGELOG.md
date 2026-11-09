@@ -9,7 +9,11 @@ versioning; `0.x` releases may change the API.
 - **Tutorials**, run by the test suite: 1, theophylline (one subject by `optimize` and
   `nuts`, each subject alone, then the population by `laplace`, each checked against R's
   `nls` and `nlme`); 2, a transit delay and absorption (what a sparse and a rich design
-  determine; profile intervals against standard-error intervals over ten simulated studies).
+  determine; profile intervals against standard-error intervals over ten simulated studies);
+  3, phenobarbital in newborns (covariates from sparse routine data, checked against
+  NONMEM's run of the same model; shrinkage).
+- **Example data:** phenobarbital (`nlme::Phenobarb`) and warfarin (the Monolix demo set),
+  with `docs/examples/DATA.md` giving the source of every dataset.
 - **Doses into one element of a field** over categorical axes: `doses DAMT at t=2 into
   Cpla[phage=mxp1001]`, and in the CMT form `doses CMT 1 into Cpla[phage=mxp1001]`. Doses
   given as a column may take several `doses` lines, one per place (two phages given together).

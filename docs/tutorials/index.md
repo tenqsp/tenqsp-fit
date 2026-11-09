@@ -10,6 +10,7 @@ see that each answer is right.
 |---|---|---|
 | 1 | [Theophylline](01_theophylline.ipynb) | does one subject, then all twelve, give the textbook values; what does a population fit add? |
 | 2 | [Transit delay and absorption](02_transit_absorption.ipynb) | can the data tell a transit delay from slow absorption; which interval to trust? |
+| 3 | [Phenobarbital in newborns](03_phenobarbital.ipynb) | what do weight and Apgar score explain in sparse routine data; does the fit match NONMEM's? |
 
 Each tutorial is a plain Python file in the repository (`docs/tutorials/`), run by the test
 suite, so it cannot go out of date. To open one as a notebook:
