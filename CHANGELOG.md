@@ -12,6 +12,9 @@ versioning; `0.x` releases may change the API.
 - **`result.vpc(rtol=, atol=)`**: the VPC's simulations at other solver tolerances than the
   fit's, without a rebuild. A fit's tolerances set for the last digits of −2LL can make the
   VPC far slower than it needs to be.
+- **A VPC by group:** `result.vpc(by="GROUP")` draws one row of panels per value of a data
+  column (dose groups, studies), each with its own time bins and percentiles; also
+  `tf.prior_predictive(problem, by=...)`.
 
 ### Fixed
 - A model whose formulas use the model's own notation, such as a field at a boundary

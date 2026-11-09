@@ -496,16 +496,19 @@ class Result:
 
     def vpc(self, *, n: int = 200, seed: int = 0, bins: int | None = None,
             percentiles=(5, 50, 95), interval: float = 0.95, log: bool = False,
-            rtol: float | None = None, atol: float | None = None):  # fmt: skip
+            rtol: float | None = None, atol: float | None = None,
+            by: str | None = None):  # fmt: skip
         """Visual predictive check: the data simulated ``n`` times from the fit with the
         same design (new units each time); the data's percentiles over time against the
         simulated ones' ``interval``. The simulations run at the fit's solver tolerances
         unless ``rtol``/``atol`` say otherwise (a fit's tolerances may be far tighter than a
-        VPC needs, and then dominate its time). Returns a ``VPC`` (``.table``, ``.figure``)."""
+        VPC needs, and then dominate its time). ``by``: a data column (a dose group): one row
+        of panels per value, each with its own bins and percentiles. Returns a ``VPC``
+        (``.table``, ``.figure``)."""
         from .results import vpc
 
         return vpc(self, n=n, seed=seed, bins=bins, percentiles=percentiles,
-                   interval=interval, log=log, rtol=rtol, atol=atol)  # fmt: skip
+                   interval=interval, log=log, rtol=rtol, atol=atol, by=by)  # fmt: skip
 
     def profile(self, name: str, *, points: int = 8, step: float | None = None,
                 level: float = 0.95, scan: bool = True, scan_range=None,

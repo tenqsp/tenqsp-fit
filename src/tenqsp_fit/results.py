@@ -325,11 +325,16 @@ def _bins(t: np.ndarray, n_bins: int | None):
 
 def vpc(result, *, n: int = 200, seed: int = 0, bins: int | None = None,
         percentiles=(5, 50, 95), interval: float = 0.95, log: bool = False,
-        rtol: float | None = None, atol: float | None = None, fig=None) -> VPC:  # fmt: skip
+        rtol: float | None = None, atol: float | None = None, by: str | None = None,
+        fig=None) -> VPC:  # fmt: skip
     """Simulate the data ``n`` times from the fit (new units each time: scores drawn from
     their distribution and correlation; residual errors from the error model; the same
     doses, times and censoring limits), and compare the percentiles over time. After NUTS,
     each simulated study takes the quantities of a different posterior draw.
+
+    ``by``: a column of the data (a dose group, a study): one row of panels per value, each
+    with its own time bins and percentiles, read from each measurement's row (12 values at
+    most).
 
     The simulations run at the fit's solver tolerances (``options rtol``, ``atol``) unless
     ``rtol``/``atol`` say otherwise. Tolerances set tight for the last digits of -2LL can make
@@ -343,7 +348,26 @@ def vpc(result, *, n: int = 200, seed: int = 0, bins: int | None = None,
         title += " (solver " + ", ".join(f"{k} {float(v):g}" for k, v in tol.items()) + ")"
     return simulate_vpc(result.problem.name, result.objective, _vpc_xs(result, n, rng), rng,
                         bins=bins, percentiles=percentiles, interval=interval, log=log,
-                        title=title, fig=fig, tol=tol)  # fmt: skip
+                        title=title, fig=fig, tol=tol,
+                        by=_by_column(result.problem, by))  # fmt: skip
+
+
+MAX_STRATA = 12  # the most values a VPC's ``by`` column may have
+
+
+def _by_column(problem, by):
+    """``(name, values)``: the data column a VPC is stratified by, one value per data row;
+    None without ``by``."""
+    if by is None:
+        return None
+    from .errors import nearest
+
+    df = problem._data.table
+    if not isinstance(by, str) or by not in df.columns:
+        raise ValueError(f"vpc: by= names a column of the data, got {by!r}."
+                         f"{nearest(str(by), map(str, df.columns))} Columns: "
+                         f"{', '.join(map(str, df.columns))}.")  # fmt: skip
+    return by, df[by].to_numpy()
 
 
 def _vpc_tol(objective, rtol, atol) -> dict:
@@ -370,11 +394,13 @@ def _vpc_xs(result, n, rng):
 
 def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95),
                  interval=0.95, log=False, title="visual predictive check",
-                 fig=None, tol=None) -> VPC:  # fmt: skip
+                 fig=None, tol=None, by=None) -> VPC:  # fmt: skip
     """The VPC's simulations and plot, one study per row of ``xs`` (the quantities), at the
-    solver tolerances ``tol`` (the fit's by default)."""
+    solver tolerances ``tol`` (the fit's by default); ``by``: ``(column, value per data
+    row)``, a row of panels per value."""
     cond = getattr(objective, "_cond", objective)
     tol = cond._tol0 if tol is None else tol
+    strata = _strata(cond, by)  # checked before the simulations
     if any(lk["error"] is None for lk in cond._links):
         raise NotImplementedError("vpc: a link with a written likelihood cannot be simulated.")
     n = len(xs)
@@ -428,38 +454,88 @@ def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95)
                     lim = np.asarray(o.below, float)  # NaN where a row has no limit
                     part = y[:, i, : len(lim)]
                     y[:, i, : len(lim)] = np.where(np.isfinite(lim), np.maximum(part, lim), part)
-        t, v = times[valid], obs_v[valid]
-        ys = y[:, valid]  # (n, measurements)
-        which, nb = _bins(t, bins)
-        for b in range(nb):
-            sel = which == b
-            if not sel.any():
+        groups = [(None, valid)]
+        if strata is not None:
+            column, of_link, levels = strata
+            g_of = of_link[lhs]
+            groups = [(g, valid & (g_of == g)) for g in levels]
+        for g, in_g in groups:
+            if not in_g.any():
                 continue
-            row = {"link": lhs, "bin": b + 1, "time": float(np.median(t[sel])),
-                   "n": int(sel.sum())}  # fmt: skip
-            sim_p = np.percentile(ys[:, sel], ptiles, axis=1)  # (percentiles, n)
-            for j, p in enumerate(ptiles):
-                tag = f"p{p:g}"
-                row[f"obs {tag}"] = float(np.percentile(v[sel], p))
-                row[f"sim {tag}"] = float(np.median(sim_p[j]))
-                row[f"sim {tag} lo"] = float(np.quantile(sim_p[j], a))
-                row[f"sim {tag} hi"] = float(np.quantile(sim_p[j], 1 - a))
-            rows.append(row)
+            t, v = times[in_g], obs_v[in_g]
+            ys = y[:, in_g]  # (n, measurements)
+            which, nb = _bins(t, bins)
+            for b in range(nb):
+                sel = which == b
+                if not sel.any():
+                    continue
+                row = {"link": lhs}
+                if strata is not None:
+                    row[column] = g
+                row.update({"bin": b + 1, "time": float(np.median(t[sel])),
+                            "n": int(sel.sum())})  # fmt: skip
+                sim_p = np.percentile(ys[:, sel], ptiles, axis=1)  # (percentiles, n)
+                for j, p in enumerate(ptiles):
+                    tag = f"p{p:g}"
+                    row[f"obs {tag}"] = float(np.percentile(v[sel], p))
+                    row[f"sim {tag}"] = float(np.median(sim_p[j]))
+                    row[f"sim {tag} lo"] = float(np.quantile(sim_p[j], a))
+                    row[f"sim {tag} hi"] = float(np.quantile(sim_p[j], 1 - a))
+                rows.append(row)
     table = pd.DataFrame(rows)
-    fig = _plot_vpc(name, table, cond, ptiles, interval, log, title, fig)
+    fig = _plot_vpc(name, table, cond, ptiles, interval, log, title, fig, strata)
     return VPC(table=table, figure=fig, n=n, percentiles=ptiles, failed=failed, ran=ran)
+
+
+def _strata(cond, by):
+    """``(column, {link: value of each measurement, (units, measurements)}, values in
+    order)`` for a VPC by a data column, or None. Raises for a missing value at a
+    measurement or more than ``MAX_STRATA`` values."""
+    if by is None:
+        return None
+    column, per_row = by
+    of_link, seen = {}, []
+    for lk in cond._links:
+        lhs = lk["lhs"]
+        g = np.full(np.shape(lk["dv"]), None, dtype=object)
+        for i, u in enumerate(cond._units):
+            o = u.observations.get(lhs)
+            if o is None:
+                continue
+            vals = per_row[np.asarray(o.rows) - 1]
+            if any(pd.isna(x) for x in vals):
+                raise ValueError(f"vpc: the column {column} is empty on a measurement of {lhs} "
+                                 f"(unit {u.id}); give every measurement a value.")  # fmt: skip
+            g[i, : len(vals)] = [_plain(x) for x in vals]
+            seen += [x for x in dict.fromkeys(g[i, : len(vals)]) if x not in seen]
+        of_link[lhs] = g
+    if len(seen) > MAX_STRATA:
+        raise ValueError(f"vpc: the column {column} has {len(seen)} values on the measurements; "
+                         f"by= takes {MAX_STRATA} at most. Group them in a column of their own "
+                         "(dose groups, studies).")  # fmt: skip
+    try:
+        seen = sorted(seen)
+    except TypeError:  # values of mixed kinds: their order in the data
+        pass
+    return column, of_link, seen
+
+
+def _plain(x):
+    """A data value as a plain Python value (numpy numbers compare and print plainly)."""
+    return x.item() if isinstance(x, np.generic) else x
 
 
 def prior_predictive(problem, *, n: int = 200, seed: int = 0, bins: int | None = None,
                      percentiles=(5, 50, 95), interval: float = 0.95,
-                     log: bool = False) -> VPC:  # fmt: skip
+                     log: bool = False, by: str | None = None) -> VPC:  # fmt: skip
     """The prior predictive check (before fitting: what data do the priors expect?):
     ``n`` studies simulated with the data's doses, times and limits, each with its
     quantities drawn from the priors (written, or by default as under ``method nuts``), new
     units from their distributions, and residual errors. The data's percentiles over the
     simulated ones' bands, as a VPC. Returns a ``VPC`` with ``.draws``, the quantities
     drawn (and whether the model ran with them; a study that did not run is left out of the
-    bands and counted in ``.failed``)."""
+    bands and counted in ``.failed``). ``by``: a row of panels per value of a data column,
+    as for ``result.vpc``."""
     from .errors import ProblemError
     from .laplace import Laplace
     from .likelihood import Objective
@@ -467,6 +543,7 @@ def prior_predictive(problem, *, n: int = 200, seed: int = 0, bins: int | None =
     from .priors import lkj_draw, priors
 
     problem.check()
+    by = _by_column(problem, by)
     objective = Laplace(problem) if problem._varying() else Objective(problem)
     names = list(objective.names)
     x0 = np.asarray(objective.x0, float)
@@ -485,43 +562,58 @@ def prior_predictive(problem, *, n: int = 200, seed: int = 0, bins: int | None =
             for j in range(i + 1, len(c.names)):
                 xs[:, index[f"corr({a},{c.names[j]})"]] = R[:, i, j]
     vp = simulate_vpc(problem.name, objective, xs, rng, bins=bins, percentiles=percentiles,
-                      interval=interval, log=log,
+                      interval=interval, log=log, by=by,
                       title=f"prior predictive check, {n} studies from the priors")  # fmt: skip
     vp.draws = pd.DataFrame(xs, columns=names)
     vp.draws["ran"] = vp.ran  # False: the model did not run with these values
     return vp
 
 
-def _plot_vpc(name, table, cond, ptiles, interval, log, title, fig=None):
+def _plot_vpc(name, table, cond, ptiles, interval, log, title, fig=None, strata=None):
     plt = _pyplot()
     links = list(dict.fromkeys(table.link))
+    levels = [None] if strata is None else strata[2]
     if fig is None:
-        fig = plt.figure(figsize=(5.2 * len(links), 3.8))
-    axes = fig.subplots(1, len(links), squeeze=False)
-    mid = ptiles[len(ptiles) // 2]
-    for ax, lhs in zip(axes[0], links, strict=True):
-        d = table[table.link == lhs]
-        for u in cond._units:
-            o = u.observations.get(lhs)
-            if o is None:
-                continue
-            cens = np.zeros(len(o.times), bool) if o.censored is None else o.censored
-            ax.plot(o.times[~cens], o.values[~cens], "o", ms=2.5, color="0.6", alpha=0.6)
-        for p in ptiles:
-            tag = f"p{p:g}"
-            color = "#d62728" if p == mid else "#1f77b4"
-            ax.fill_between(d.time, d[f"sim {tag} lo"], d[f"sim {tag} hi"], color=color,
-                            alpha=0.18, lw=0)  # fmt: skip
-            ax.plot(d.time, d[f"obs {tag}"], "-" if p == mid else "--", color=color, lw=1.4)
-        if log:
-            ax.set_yscale("log")
-        ax.set_xlabel("TIME")
-        ax.set_ylabel(lhs)
-        ax.set_title(f"{lhs}: data percentiles {', '.join(f'{p:g}' for p in ptiles)} (lines), "
-                     f"simulated {interval:.0%} intervals (bands)", fontsize=8)  # fmt: skip
+        fig = plt.figure(figsize=(5.2 * len(links), 3.8 * len(levels)))
+    axes = fig.subplots(len(levels), len(links), squeeze=False)
+    for r, g in enumerate(levels):
+        for ax, lhs in zip(axes[r], links, strict=True):
+            d = table[table.link == lhs]
+            mine = None
+            if strata is not None:
+                d = d[d[strata[0]] == g]
+                mine = strata[1][lhs] == g  # (units, measurements)
+            _plot_vpc_panel(ax, d, cond, lhs, mine, ptiles, interval, log)
+            if strata is not None:
+                ax.set_title(f"{strata[0]} = {g}\n{ax.get_title()}", fontsize=8)
     fig.suptitle(f"{name}: {title}", fontsize=11)
     _tight(fig)
     return fig
+
+
+def _plot_vpc_panel(ax, d, cond, lhs, mine, ptiles, interval, log):
+    """One panel: the data of ``lhs`` (only where ``mine``, when stratified), the data's
+    percentiles over the simulated bands."""
+    mid = ptiles[len(ptiles) // 2]
+    for i, u in enumerate(cond._units):
+        o = u.observations.get(lhs)
+        if o is None:
+            continue
+        cens = np.zeros(len(o.times), bool) if o.censored is None else o.censored
+        show = ~cens if mine is None else ~cens & mine[i, : len(o.times)].astype(bool)
+        ax.plot(o.times[show], o.values[show], "o", ms=2.5, color="0.6", alpha=0.6)
+    for p in ptiles:
+        tag = f"p{p:g}"
+        color = "#d62728" if p == mid else "#1f77b4"
+        ax.fill_between(d.time, d[f"sim {tag} lo"], d[f"sim {tag} hi"], color=color,
+                        alpha=0.18, lw=0)  # fmt: skip
+        ax.plot(d.time, d[f"obs {tag}"], "-" if p == mid else "--", color=color, lw=1.4)
+    if log:
+        ax.set_yscale("log")
+    ax.set_xlabel("TIME")
+    ax.set_ylabel(lhs)
+    ax.set_title(f"{lhs}: data percentiles {', '.join(f'{p:g}' for p in ptiles)} (lines), "
+                 f"simulated {interval:.0%} intervals (bands)", fontsize=8)  # fmt: skip
 
 
 # ----------------------------------------------------------------------------- profile
