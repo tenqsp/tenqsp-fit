@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use tenqsp-fit in your work, please cite it as below."
 title: "tenqsp-fit: fitting TenQSP models to data, with a diagnosis of what the data determine"
 type: software
-version: "0.1.0"
-date-released: "2026-11-07"
+version: "0.2.0"
+date-released: "2026-11-09"
 doi: "10.5281/zenodo.24040995"
 identifiers:
   - type: doi
