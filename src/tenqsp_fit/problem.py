@@ -260,9 +260,9 @@ class _ModelInfo:
             # notation (a field at a boundary, Pdl(w=1); a table's entry, Vo[organ=liver]),
             # which no formula reader of the fit's takes whole
             elif n in self.observable_exprs:
-                todo.extend(_NAME.findall(self.observable_exprs[n]))
+                todo.extend(_model_names(self.observable_exprs[n]))
             elif n in self.definitions:
-                todo.extend(_NAME.findall(self.definitions[n]))
+                todo.extend(_model_names(self.definitions[n]))
         return out
 
     def observable_axes(self, name: str) -> tuple[str, ...]:
@@ -306,7 +306,7 @@ class _ModelInfo:
     def param_names(self, text: str) -> set[str]:
         """Model parameters a formula depends on, through the model's named formulas (a
         per-category parameter used as ``k[strain]``: each of its entries)."""
-        out, seen, todo = set(), set(), list(E.formula(text).names)
+        out, seen, todo = set(), set(), _model_names(text)
         while todo:
             n = todo.pop()
             if n in seen:
@@ -315,10 +315,23 @@ class _ModelInfo:
             if n in self.params:
                 out.add(n)
             elif n in self.definitions:
-                todo.extend(E.formula(self.definitions[n]).names)
+                todo.extend(_model_names(self.definitions[n]))
             elif (s := E.split(n)) is not None and s[0] in self.tables:
                 out.update(self.tables[s[0]].entries)
+            elif n in self.tables:  # a table in the model's own notation: all its entries
+                out.update(self.tables[n].entries)
         return out
+
+
+def _model_names(text: str) -> list[str]:
+    """The names a formula of the model uses. Read as a formula where it is one (a table's
+    entry, ``Vo[organ=liver]``, is then exactly that entry); otherwise, for the model's own
+    notation that no formula reader takes (a field at a boundary, ``Pdl(w=1)``), by their
+    spelling: a table read there stands for all its entries."""
+    try:
+        return list(E.formula(text).names)
+    except ValueError:
+        return _NAME.findall(text)
 
 
 # ----------------------------------------------------------------------------- the problem

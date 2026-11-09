@@ -500,24 +500,44 @@ def test_doses_into_a_field_over_a_continuous_axis_arrive_later():
         tf.Problem(m).doses(into="u")
 
 
-def test_a_model_reading_a_field_at_a_boundary_builds_its_units():
-    """A model formula in the model's own notation (a field at a boundary, ``P(w=1)``) is
-    read for the states it uses: the units build, and the dose-time check knows that the
-    observable reads ``P``."""
-    m = tq.Model.from_text(
-        "model edge\naxis w in [0, 1] n=4 kind=one_way\nparam v = 2, k = 0.5\nfield P(w)\n"
-        "compartment A\nd_t(P) = -d_w(v*P)\n    at w=0: P = k*A\n    at w=1: outflow\n"
-        "d_t(A) = -k*A\nS = P(w=1)\nobservable out = v*S\n"
+def test_a_model_reading_a_field_at_a_boundary_can_be_fitted():
+    """A model formula in the model's own notation (a field at a boundary, ``P(w=1)``, as a
+    transit delay): the units build, the dose-time check knows the observable reads ``P``,
+    and the summary, the fit (exact data: the true values back) and what reads the model
+    afterwards all work."""
+    text = (
+        "model edge\naxis w in [0, 1] n=8 kind=one_way\nparam v = 2, k = 0.5, CL = 1\n"
+        "field P(w)\ncompartment A\ncompartment C\nd_t(P) = -d_w(v*P)\n"
+        "    at w=0: P = k*A\n    at w=1: outflow\nd_t(A) = -k*A\nS = P(w=1)\n"
+        "d_t(C) = v*S - CL*C\nobservable out = C\n"
     )
-    df = pd.DataFrame({"ID": [1] * 4, "TIME": [0.5, 1.0, 2.0, 4.0], "DV": 1.0, "D": 10.0})
+    m = tq.Model.from_text(text)
+    times = [0.5, 1, 2, 3, 4, 6, 8, 12]
+    rows = []
+    for i, dose in enumerate([10.0, 40.0], 1):
+        sol = m.solve((0, 12), times=times, regimen=tq.bolus("A", dose, times=[0]),
+                      rtol=1e-10, atol=1e-12)  # fmt: skip
+        out = zip(times, sol["out"], strict=True)
+        rows += [dict(ID=i, TIME=t, DV=float(c), D=dose) for t, c in out]
     p = tf.Problem(m)
-    p.data(df)
+    p.data(pd.DataFrame(rows))
     p.unit("ID")
     p.doses(column="D", at=0, into="A")
     p.observe("out", "DV")
-    p.estimate("k", 0.4)
-    p.error("out", tf.additive(0.1))
+    p.estimate("k", 0.3)
+    p.estimate("CL", 0.7)
+    p.fix("v", 2)
+    p.error("out", tf.proportional(0.1))
     p.method("optimize")
-    p.check()
-    assert p._m.reads("out") == {"P"}
-    assert len(p.units()) == 1
+    p.options(rtol=1e-10, atol=1e-12, progress="none", checks="quick")
+    assert p._m.reads("out") == {"C"} and p._m.reads("S") == {"P"}
+    assert p._m.param_names("S") == set()  # a field and an axis: no parameter
+    assert "fixed" in p.summary()
+    r = tf.fit(p)
+    assert r.estimates["k"] == pytest.approx(0.5, rel=1e-4)
+    assert r.estimates["CL"] == pytest.approx(1.0, rel=1e-4)
+    assert len(r.tables()["sdtab"]) == len(rows)
+    assert "S = P(w=1)" in r.model().to_text()
+    with pytest.raises(ValueError, match=r"a formula of the model \(S = P\(w=1\)\)"):
+        p2 = tf.Problem(m)
+        p2.estimate("S", 1.0)
