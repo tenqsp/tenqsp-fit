@@ -203,7 +203,8 @@ result.plot_individual(units=[1, 2, 3, 4])
 ### The visual predictive check
 
 ```python
-v = result.vpc()      # n=200, seed=0, bins=None, percentiles=(5, 50, 95), interval=0.95, log=False
+v = result.vpc()      # n=200, seed=0, bins=None, percentiles=(5, 50, 95), interval=0.95, log=False,
+                      # rtol=None, atol=None (the fit's solver tolerances)
 v.figure              # the plot
 v.table               # the numbers
 ```
@@ -214,7 +215,13 @@ and residual errors from the error model. The data's percentiles over time are d
 bands: for each percentile, the `interval` of that percentile across the simulated studies.
 Time bins are the distinct times when there are 12 or fewer (a designed study), otherwise 8
 bins with equal numbers of measurements (`bins=` sets the number). A study whose model does not
-run is left out and counted in the title. The figure is in the
+run is left out and counted in the title.
+
+The simulations run at the fit's solver tolerances (`options rtol`, `atol`). A fit set to
+`rtol=1e-10` for the last digits of −2LL makes every simulated study that much slower, though
+the VPC's spread comes from the residual and between-unit variation, far above the solver's
+error. `result.vpc(rtol=1e-6)` runs it at a looser tolerance without rebuilding the model;
+the title says so. The figure is in the
 [population quickstart](../start/quickstart-population.md#goodness-of-fit-and-the-vpc).
 
 ```text

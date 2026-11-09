@@ -249,7 +249,7 @@ def test_missing_doses_line_proposes(folder):
     df = pk_table()
     df["CMT"] = 1
     p = python_problem(folder)
-    p._doses = None
+    p._doses = []
     p._data = None
     p.data(df)
     with pytest.raises(tf.ProblemError) as e:

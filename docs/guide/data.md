@@ -59,6 +59,19 @@ observe conc = DV
 `doses Dose at t=0 into depot`: each unit gets one bolus of its `Dose` value at time 0 into
 the compartment `depot`. The dose column must have one value per unit.
 
+A dose may also go into one element of a field over categorical axes, written with each axis
+and its label, and doses given as columns may take several lines, one per place. Two phages
+given together at t = 2 h into their own slices of a plasma field `Cpla(phage)`:
+
+```text
+doses DAMT1 at t=2 into Cpla[phage=mxp1001]
+doses DAMT2 at t=2 into Cpla[phage=mxp1002]
+```
+
+Both lines may read the same column when each phage gets the same amount. A dose that
+reaches each element in its own proportion is the model's `bioavailability Cpla = F[phage]`
+(TenQSP 0.8.1 or later).
+
 ## The NONMEM layout: dose rows
 
 The same data with dose rows, `CMT 1` for the dose and `CMT 2` for the samples, and the
@@ -81,8 +94,10 @@ observe conc = DV where CMT == 2
 ```
 
 `doses CMT 1 into depot` maps CMT numbers to the model's compartments by name; several are
-written `doses CMT 1 into depot, 2 into centr`. When every dose goes to one place,
-`doses into depot` is enough and the CMT column is not read for doses.
+written `doses CMT 1 into depot, 2 into centr`. A place may be one element of a field over
+categorical axes: `doses CMT 1 into Cpla[phage=mxp1001], 2 into Cpla[phage=mxp1002]`. When
+every dose goes to one place, `doses into depot` is enough and the CMT column is not read for
+doses. Dose rows take one `doses` line.
 
 `summary()` shows how the rows were read:
 
@@ -124,7 +139,8 @@ print(p.table())
 
 Not read yet, each with a message saying what to do instead: steady-state doses (`SS`), resets
 (`EVID 3` and `4`), a rate or duration set by the model (`RATE -1`, `-2`), doses into a field
-of a structured population (doses go into compartments), and a measurement at the time of a
+over a continuous axis (doses go into compartments and into elements of fields over
+categorical axes), and a measurement at the time of a
 dose into a compartment it reads directly when the measurement row comes before the dose row
 (NONMEM reads such a row as the value just before the dose; TenQSP gives the value just
 after it).

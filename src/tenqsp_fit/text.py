@@ -27,6 +27,7 @@ from .problem import Problem
 __all__ = ["load", "read"]
 
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+_PLACE = rf"{_NAME}(?:\s*\[[^\]]*\])?"  # a compartment, or one element of a field
 _FIT_LINE = re.compile(rf"fit(\s+({_NAME}))?")
 _AT_START = re.compile(rf"at\s+{_NAME}\s*=")
 _OPENERS, _CLOSERS = "([{", ")]}"
@@ -349,12 +350,12 @@ class _Reader:
         self.p._unit_origin = st.origin
 
     def st_doses(self, rest: str, st: _Statement) -> None:
-        if m := re.fullmatch(rf"into\s+({_NAME})", rest):
+        if m := re.fullmatch(rf"into\s+({_PLACE})", rest):
             self.p.doses(into=m.group(1))
         elif m := re.fullmatch(r"CMT\s+(.*)", rest, re.S):
             cmt = {}
             for item in _split_top(m.group(1)):
-                kv = re.fullmatch(rf"(\S+)\s+into\s+({_NAME})", item)
+                kv = re.fullmatch(rf"(\S+)\s+into\s+({_PLACE})", item)
                 if not kv:
                     raise _Problem(
                         f"cannot read '{item}'; write doses CMT 1 into depot, 2 into centr."
@@ -364,14 +365,15 @@ class _Reader:
                     raise _Problem(f"CMT {kv.group(1)} is given twice.")
                 cmt[k] = kv.group(2)
             self.p.doses(cmt={int(k) if k.is_integer() else k: v for k, v in cmt.items()})
-        elif m := re.fullmatch(rf"({_NAME})\s+at\s+t\s*=\s*(\S+)\s+into\s+({_NAME})", rest):
+        elif m := re.fullmatch(rf"({_NAME})\s+at\s+t\s*=\s*(\S+)\s+into\s+({_PLACE})", rest):
             self.p.doses(column=m.group(1), at=_number(m.group(2), "doses: at"), into=m.group(3))
         else:
             raise _Problem(
                 "write doses into depot, doses CMT 1 into depot, 2 into centr, or "
-                "doses Dose at t=0 into depot."
+                "doses Dose at t=0 into depot (a place is a compartment, or one element of a "
+                "field: C[phage=a])."
             )
-        self.p._doses.origin = st.origin
+        self.p._doses[-1].origin = st.origin
 
     def st_observe(self, rest: str, st: _Statement) -> None:
         body, where = _split_at(rest, _WHERE) or (rest, None)

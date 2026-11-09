@@ -325,15 +325,38 @@ def _bins(t: np.ndarray, n_bins: int | None):
 
 def vpc(result, *, n: int = 200, seed: int = 0, bins: int | None = None,
         percentiles=(5, 50, 95), interval: float = 0.95, log: bool = False,
-        fig=None) -> VPC:  # fmt: skip
+        rtol: float | None = None, atol: float | None = None, fig=None) -> VPC:  # fmt: skip
     """Simulate the data ``n`` times from the fit (new units each time: scores drawn from
     their distribution and correlation; residual errors from the error model; the same
     doses, times and censoring limits), and compare the percentiles over time. After NUTS,
-    each simulated study takes the quantities of a different posterior draw."""
+    each simulated study takes the quantities of a different posterior draw.
+
+    The simulations run at the fit's solver tolerances (``options rtol``, ``atol``) unless
+    ``rtol``/``atol`` say otherwise. Tolerances set tight for the last digits of -2LL can make
+    the VPC the slowest step by far, while the simulated spread comes from the residual and
+    between-unit variation, orders of magnitude above the solver's error: ``rtol=1e-6`` is
+    usually plenty. No rebuild of the model is needed."""
     rng = np.random.default_rng(seed)
+    tol = _vpc_tol(result.objective, rtol, atol)
+    title = "visual predictive check"
+    if rtol is not None or atol is not None:
+        title += " (solver " + ", ".join(f"{k} {float(v):g}" for k, v in tol.items()) + ")"
     return simulate_vpc(result.problem.name, result.objective, _vpc_xs(result, n, rng), rng,
                         bins=bins, percentiles=percentiles, interval=interval, log=log,
-                        title="visual predictive check", fig=fig)  # fmt: skip
+                        title=title, fig=fig, tol=tol)  # fmt: skip
+
+
+def _vpc_tol(objective, rtol, atol) -> dict:
+    """The fit's solver tolerances, with ``rtol``/``atol`` in place of its own where given."""
+    cond = getattr(objective, "_cond", objective)
+    tol = dict(cond._tol0)
+    for k, v in (("rtol", rtol), ("atol", atol)):
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 1:
+            raise ValueError(f"vpc: {k} is a number between 0 and 1, got {v!r}.")
+        tol[k] = jnp.asarray(float(v), dtype=jnp.float64)
+    return tol
 
 
 def _vpc_xs(result, n, rng):
@@ -347,9 +370,11 @@ def _vpc_xs(result, n, rng):
 
 def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95),
                  interval=0.95, log=False, title="visual predictive check",
-                 fig=None) -> VPC:  # fmt: skip
-    """The VPC's simulations and plot, one study per row of ``xs`` (the quantities)."""
+                 fig=None, tol=None) -> VPC:  # fmt: skip
+    """The VPC's simulations and plot, one study per row of ``xs`` (the quantities), at the
+    solver tolerances ``tol`` (the fit's by default)."""
     cond = getattr(objective, "_cond", objective)
+    tol = cond._tol0 if tol is None else tol
     if any(lk["error"] is None for lk in cond._links):
         raise NotImplementedError("vpc: a link with a written likelihood cannot be simulated.")
     n = len(xs)
@@ -360,7 +385,7 @@ def simulate_vpc(name, objective, xs, rng, *, bins=None, percentiles=(5, 50, 95)
 
     def one(x, e):
         Z = e @ jnp.linalg.cholesky(objective._R(x)).T if q else None
-        return cond._predictions(x, cond._fs(cond._model_params(x, Z)))
+        return cond._predictions(x, cond._fs(cond._model_params(x, Z), **tol))
 
     batched = jax.jit(jax.vmap(one))
     preds = []

@@ -372,3 +372,152 @@ def test_a_measurement_at_the_start_of_an_infusion_is_read():
                            DV=[np.nan, 3.1, np.nan, 4.0], CMT=[1, 2, 2, 2]))  # fmt: skip
     p = problem(df, doses={"cmt": {1: "depot", 2: "centr"}})
     np.testing.assert_array_equal(p.units()[0].observations["conc"].times, [1, 6])
+
+
+TWO = """model two
+axis phage categorical [a, b]
+param k[phage] = {a: 0.3, b: 0.1}
+field C(phage)
+compartment B
+d_t(C) = -k[phage]*C
+d_t(B) = -0.1*B
+observable Ca = C[phage=a]
+observable Cb = C[phage=b]
+"""
+
+
+def two_phages(rows: bool):
+    """Two units, each dosed into both elements of a field at t=2 (as two phages into a
+    plasma field): exact data, from the closed form. As two dose columns, or as dose rows
+    with CMT 1 and 2."""
+    out = []
+    for i, (a, b) in enumerate([(10.0, 4.0), (20.0, 8.0)], 1):
+        if rows:
+            out += [dict(ID=i, TIME=2.0, AMT=a, CMT=1, EVID=1, DVID=0),
+                    dict(ID=i, TIME=2.0, AMT=b, CMT=2, EVID=1, DVID=0)]  # fmt: skip
+        for t in (3.0, 4.0, 6.0, 8.0):
+            more = {} if rows else {"AMTA": a, "AMTB": b}
+            ya, yb = a * np.exp(-0.3 * (t - 2)), b * np.exp(-0.1 * (t - 2))
+            out += [dict(ID=i, TIME=t, DV=ya, EVID=0, DVID=1, **more),
+                    dict(ID=i, TIME=t, DV=yb, EVID=0, DVID=2, **more)]  # fmt: skip
+    return pd.DataFrame(out)
+
+
+def fit_two(df, doses):
+    p = tf.Problem(tq.Model.from_text(TWO))
+    p.data(df)
+    p.unit("ID")
+    doses(p)
+    p.observe("Ca", "DV", where="DVID == 1")
+    p.observe("Cb", "DV", where="DVID == 2")
+    for lab in ("a", "b"):
+        p.estimate(f"k[{lab}]", 0.2)
+    p.error("Ca", tf.proportional(0.1))
+    p.error("Cb", tf.proportional(0.1))
+    p.method("optimize")
+    p.options(progress="none", checks="quick")
+    return p
+
+
+@pytest.mark.parametrize("rows", [False, True])
+def test_doses_into_elements_of_a_field(rows):
+    """``doses AMTA at t=2 into C[phage=a]`` (one statement per element), or ``doses CMT 1
+    into C[phage=a], 2 into C[phage=b]``: each unit's regimen doses both elements, and the
+    fit recovers both rates exactly."""
+    if rows:
+
+        def doses(p):
+            p.doses(cmt={1: "C[phage=a]", 2: "C[ phage = b ]"})
+    else:
+
+        def doses(p):
+            p.doses(column="AMTA", at=2, into="C[phage = a]")
+            p.doses(column="AMTB", at=2, into="C[phage=b]")
+
+    p = fit_two(two_phages(rows), doses)
+    reg = p.units()[1].scenario.regimen
+    assert [(e.time, e.target, e.where, e.amount) for e in reg.events] == [
+        (2.0, "C", (("phage", "a"),), 20.0),
+        (2.0, "C", (("phage", "b"),), 8.0),
+    ]
+    text = p.to_text()
+    if rows:
+        assert "doses CMT 1 into C[phage=a], 2 into C[phage=b]" in text
+    else:
+        assert "doses AMTA at t=2 into C[phage=a]\ndoses AMTB at t=2 into C[phage=b]" in text
+        assert "2 doses (one per unit)" in p.summary()
+    r = tf.fit(p)
+    assert r.estimates["k[a]"] == pytest.approx(0.3, rel=1e-5)
+    assert r.estimates["k[b]"] == pytest.approx(0.1, rel=1e-5)
+
+
+def test_doses_into_a_field_as_fit_text(tmp_path):
+    df = two_phages(rows=False)
+    df.to_csv(tmp_path / "two.csv", index=False)
+    (tmp_path / "two.tq").write_text(
+        TWO + '\nfit two\ndata "two.csv"\nunit ID\n'
+        "doses AMTA at t=2 into C[phage=a]\ndoses AMTB at t=2 into C[phage=b]\n"
+        "observe Ca = DV where DVID == 1\nobserve Cb = DV where DVID == 2\n"
+        "estimate k[a] = 0.2\nestimate k[b] = 0.2\n"
+        "error Ca ~ proportional(0.1)\nerror Cb ~ proportional(0.1)\nmethod optimize\n"
+    )
+    p = tf.load(tmp_path / "two.tq")
+    assert [d.into for d in p._doses] == ["C[phage=a]", "C[phage=b]"]
+    # each statement keeps its own line, for the messages about it
+    assert "doses AMTA" in p._doses[0].origin and "doses AMTB" in p._doses[1].origin
+    assert tf.fit(p).estimates["k[b]"] == pytest.approx(0.1, rel=1e-5)
+
+
+@pytest.mark.parametrize(
+    "calls, message",
+    [
+        ([dict(column="AMTA", at=2, into="C")], r"say which element.*C\[phage=a\]"),
+        ([dict(column="AMTA", at=2, into="C[phage=c]")], "no label 'c'"),
+        ([dict(column="AMTA", at=2, into="C[organ=a]")], "write the axis and its label"),
+        ([dict(column="AMTA", at=2, into="B[phage=a]")], "'B' is a compartment"),
+        ([dict(column="AMTA", at=2, into="D")], "no compartment or field 'D'"),
+        ([dict(column="AMTA", at=2, into="C[phage=a]"),
+          dict(column="AMTB", at=2, into="C[phage=a]")], "declared twice; give one per place"),
+        ([dict(into="C[phage=a]"), dict(column="AMTB", at=2, into="C[phage=b]")],
+         "declared twice; give one doses statement"),
+        ([dict(column="AMTB", at=2, into="C[phage=b]"), dict(into="C[phage=a]")],
+         "declared twice; give one doses statement"),
+    ],
+)  # fmt: skip
+def test_doses_into_a_field_mistakes(calls, message):
+    p = tf.Problem(tq.Model.from_text(TWO))
+    with pytest.raises(ValueError, match=message):
+        for c in calls:
+            p.doses(**c)
+
+
+def test_doses_into_a_field_over_a_continuous_axis_arrive_later():
+    m = tq.Model.from_text(
+        "model z\naxis z in [0, 1] n=4 kind=one_way\nparam v = 1\nfield u(z)\n"
+        "d_t(u) = -d_z(v*u)\n    at z=1: outflow\nobservable total = u(z=1)\n"
+    )
+    with pytest.raises(ValueError, match="continuous axis z"):
+        tf.Problem(m).doses(into="u")
+
+
+def test_a_model_reading_a_field_at_a_boundary_builds_its_units():
+    """A model formula in the model's own notation (a field at a boundary, ``P(w=1)``) is
+    read for the states it uses: the units build, and the dose-time check knows that the
+    observable reads ``P``."""
+    m = tq.Model.from_text(
+        "model edge\naxis w in [0, 1] n=4 kind=one_way\nparam v = 2, k = 0.5\nfield P(w)\n"
+        "compartment A\nd_t(P) = -d_w(v*P)\n    at w=0: P = k*A\n    at w=1: outflow\n"
+        "d_t(A) = -k*A\nS = P(w=1)\nobservable out = v*S\n"
+    )
+    df = pd.DataFrame({"ID": [1] * 4, "TIME": [0.5, 1.0, 2.0, 4.0], "DV": 1.0, "D": 10.0})
+    p = tf.Problem(m)
+    p.data(df)
+    p.unit("ID")
+    p.doses(column="D", at=0, into="A")
+    p.observe("out", "DV")
+    p.estimate("k", 0.4)
+    p.error("out", tf.additive(0.1))
+    p.method("optimize")
+    p.check()
+    assert p._m.reads("out") == {"P"}
+    assert len(p.units()) == 1
