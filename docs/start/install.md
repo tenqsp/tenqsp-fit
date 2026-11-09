@@ -1,6 +1,6 @@
 # Install
 
-tenqsp-fit needs Python 3.12 or later. It installs TenQSP (0.7.0 or later) with it.
+tenqsp-fit needs Python 3.12 or later. It installs TenQSP (0.8.0 or later) with it.
 
 ```bash
 pip install tenqsp-fit                 # the library

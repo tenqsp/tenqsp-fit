@@ -5,7 +5,7 @@ name: CI
 #   push arrives;
 # - Mondays, release tags and on demand: Python 3.12 and 3.13, plus the slow tests (NUTS runs,
 #   validation against the stored reference fits) on 3.12.
-# TenQSP (0.7.0 or later) comes from PyPI. The documentation is built and published by
+# TenQSP (0.8.0 or later) comes from PyPI. The documentation is built and published by
 # docs.yml.
 on:
   push:
