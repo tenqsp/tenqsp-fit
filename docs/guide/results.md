@@ -204,7 +204,7 @@ result.plot_individual(units=[1, 2, 3, 4])
 
 ```python
 v = result.vpc()      # n=200, seed=0, bins=None, percentiles=(5, 50, 95), interval=0.95, log=False,
-                      # rtol=None, atol=None (the fit's solver tolerances)
+                      # rtol=None, atol=None (the fit's solver tolerances), by=None
 v.figure              # the plot
 v.table               # the numbers
 ```
@@ -216,6 +216,15 @@ bands: for each percentile, the `interval` of that percentile across the simulat
 Time bins are the distinct times when there are 12 or fewer (a designed study), otherwise 8
 bins with equal numbers of measurements (`bins=` sets the number). A study whose model does not
 run is left out and counted in the title.
+
+**By group.** When the units differ by design (dose groups, studies), one set of percentiles
+over all of them mixes the groups: the spread between the 5th and 95th percentiles is then
+mostly the difference between the groups, not the variation within them.
+`result.vpc(by="GROUP")` draws one row of panels per value of a data column, each with its
+own time bins and percentiles, and `v.table` gets a `GROUP` column. The value is read from
+each measurement's row, so a column that changes within a unit works too; 12 values at most
+(group a continuous covariate in a column of its own). `tf.prior_predictive(problem,
+by="GROUP")` does the same before fitting.
 
 The simulations run at the fit's solver tolerances (`options rtol`, `atol`). A fit set to
 `rtol=1e-10` for the last digits of −2LL makes every simulated study that much slower, though

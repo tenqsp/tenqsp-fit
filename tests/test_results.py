@@ -318,3 +318,40 @@ def test_vpc_at_other_solver_tolerances(pooled):
     for bad in (0, 1.5, "1e-6", True):
         with pytest.raises(ValueError, match="rtol is a number between 0 and 1"):
             pooled.vpc(n=5, rtol=bad)
+
+
+def test_vpc_by_a_data_column(pooled):
+    """``vpc(by="Dose")``: a row of panels per dose, each with its own bins; with nothing
+    varying between units, each dose's simulated median is that dose's closed-form curve."""
+    v = pooled.vpc(n=200, seed=4, by="Dose")
+    t = v.table
+    doses = sorted(set(table().Dose))
+    assert list(t.columns[:3]) == ["link", "Dose", "bin"]
+    assert sorted(set(t.Dose)) == doses and (t.n == 1).all()
+    assert len(t) == len(doses) * len(set(table().TIME))
+    e = pooled.estimates
+    for d in doses:
+        rows = t[t.Dose == d]
+        f = conc(rows.time.to_numpy(), d, e["ka"], e["CL"], e["ke"])
+        np.testing.assert_allclose(rows["sim p50"], f, atol=0.1)  # residual SD 0.3
+    axes = v.figure.axes
+    assert len(axes) == len(doses) and axes[0].get_title().startswith(f"Dose = {doses[0]}")
+    # each panel shows its own dose's data only: one subject's 8 measurements
+    for ax in axes:
+        points = sum(len(x.get_xdata()) for x in ax.lines if x.get_marker() == "o")
+        assert points == len(set(table().TIME))
+
+
+@pytest.mark.parametrize(
+    "by, message",
+    [("dose", "names a column of the data"), ("DV", "takes 12 at most")],
+)
+def test_vpc_by_mistakes(pooled, by, message):
+    with pytest.raises(ValueError, match=message):
+        pooled.vpc(n=5, by=by)
+
+
+def test_prior_predictive_by_a_data_column(tmp_path):
+    p = problem(tmp_path, options="starts=1", extra="prior ka ~ lognormal(median=1.5, sdlog=0.3)\n")
+    v = tf.prior_predictive(p, n=50, seed=1, by="Dose")
+    assert sorted(set(v.table.Dose)) == sorted(set(table().Dose))
