@@ -542,3 +542,17 @@ observable y = sum_s(A)/2
     r = tf.fit(tf.Problem.from_text(two + fit))
     k = _value(tq.Model.from_text(r.model().to_text()), "k")
     assert k[1] == 0.2 and k[0] == r.estimates["k[x]"] and abs(k[0] - 0.3) < 1e-3
+
+
+def test_a_value_on_a_bound_maps_to_a_finite_logit():
+    """A value on a bound (a profile's last point) gives a large finite logit, no warning."""
+    import warnings
+
+    from tenqsp_fit.optimize import to_u, to_x
+
+    sc = [("logit", 0.3, 100.0)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        u = to_u([np.float64(100.0)], sc), to_u([np.float64(0.3)], sc)
+    assert np.all(np.isfinite(u)) and u[0][0] > 30 and u[1][0] < -30
+    assert float(to_x(u[0], sc)[0]) == pytest.approx(100.0)

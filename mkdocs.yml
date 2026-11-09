@@ -70,6 +70,7 @@ nav:
   - Tutorials:
       - tutorials/index.md
       - 1 Theophylline: tutorials/01_theophylline.ipynb
+      - 2 Transit delay and absorption: tutorials/02_transit_absorption.ipynb
   - Methods:
       - optimize: methods/optimize.md
       - laplace: methods/laplace.md

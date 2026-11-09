@@ -8,7 +8,8 @@ versioning; `0.x` releases may change the API.
 ### Added
 - **Tutorials**, run by the test suite: 1, theophylline (one subject by `optimize` and
   `nuts`, each subject alone, then the population by `laplace`, each checked against R's
-  `nls` and `nlme`).
+  `nls` and `nlme`); 2, a transit delay and absorption (what a sparse and a rich design
+  determine; profile intervals against standard-error intervals over ten simulated studies).
 - **Doses into one element of a field** over categorical axes: `doses DAMT at t=2 into
   Cpla[phage=mxp1001]`, and in the CMT form `doses CMT 1 into Cpla[phage=mxp1001]`. Doses
   given as a column may take several `doses` lines, one per place (two phages given together).
@@ -22,6 +23,9 @@ versioning; `0.x` releases may change the API.
 ### Fixed
 - `tf.fit(problem, method="optimize")` refused a problem written without a `method` line
   ("no method"); `method=` now stands for it.
+- A profile whose end was not reached printed it as `nan`; it now says "not reached".
+- A profile that reached a bound went on refitting points next to it,
+  and a value on a bound gave a divide-by-zero warning.
 - A model whose formulas use the model's own notation, such as a field at a boundary
   (`Psen = Pdl(w=1)`, a transit delay), could not be fitted: building the units, the
   summary, and fixing or estimating a name the model defines all stopped at that formula.
