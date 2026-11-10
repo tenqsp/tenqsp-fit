@@ -5,6 +5,8 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-11-10
+
 ### Added
 - **Tutorials**, run by the test suite: 1, theophylline (one subject by `optimize` and
   `nuts`, each subject alone, then the population by `laplace`, each checked against R's
