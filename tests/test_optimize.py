@@ -77,6 +77,19 @@ def test_least_squares_by_levenberg_marquardt(tmp_path, oracle):
     assert "3 at the best fit" in repr(r)
 
 
+def test_method_given_to_fit_stands_for_a_missing_method_line(tmp_path, oracle):
+    """``tf.fit(p, method="optimize")`` fits a problem written without a method line."""
+    p = problem(tmp_path)
+    p._method = None
+    with pytest.raises(tf.ProblemError, match="no method"):
+        tf.fit(p)
+    r = tf.fit(p, method="optimize")
+    assert r.status == "converged" and p._method is None
+    np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], oracle[0], rtol=1e-5)
+    with pytest.raises(ValueError, match="unknown method 'optimise'. Did you mean 'optimize'"):
+        tf.fit(p, method="optimise")
+
+
 def test_estimated_sd_by_bfgs(tmp_path, oracle):
     """An additive sd does not move the least-squares point; at the minimum sd^2 = RSS/n."""
     x, rss, n = oracle
@@ -529,3 +542,17 @@ observable y = sum_s(A)/2
     r = tf.fit(tf.Problem.from_text(two + fit))
     k = _value(tq.Model.from_text(r.model().to_text()), "k")
     assert k[1] == 0.2 and k[0] == r.estimates["k[x]"] and abs(k[0] - 0.3) < 1e-3
+
+
+def test_a_value_on_a_bound_maps_to_a_finite_logit():
+    """A value on a bound (a profile's last point) gives a large finite logit, no warning."""
+    import warnings
+
+    from tenqsp_fit.optimize import to_u, to_x
+
+    sc = [("logit", 0.3, 100.0)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        u = to_u([np.float64(100.0)], sc), to_u([np.float64(0.3)], sc)
+    assert np.all(np.isfinite(u)) and u[0][0] > 30 and u[1][0] < -30
+    assert float(to_x(u[0], sc)[0]) == pytest.approx(100.0)

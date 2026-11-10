@@ -122,8 +122,8 @@ def to_x(u, sc):
 def to_u(x, sc) -> np.ndarray:
     out = []
     for v, s in zip(x, sc, strict=True):
-        if s[0] == "logit":
-            p = (v - s[1]) / (s[2] - s[1])
+        if s[0] == "logit":  # a value on a bound maps to a large finite u, not to +-inf
+            p = min(max((v - s[1]) / (s[2] - s[1]), 1e-15), 1 - 1e-15)
             out.append(math.log(p / (1 - p)))
         elif s[0] == "above":
             out.append(math.log(v - s[1]))

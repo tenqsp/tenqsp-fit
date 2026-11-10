@@ -187,6 +187,7 @@ def test_ctrl_c_stops_a_profile_and_keeps_its_points(pooled, monkeypatch):
     pr = pooled.profile("ke")
     assert pr.stopped_by == "Ctrl-C" and "stopped by Ctrl-C" in repr(pr)
     assert 2 <= len(pr.table) < 8  # the estimate and the points computed before the stop
+    assert "not reached" in repr(pr) and "nan" not in repr(pr)  # an end not reached, in words
 
 
 def test_profile_scan_finds_the_flip_flop_optimum(tmp_path):

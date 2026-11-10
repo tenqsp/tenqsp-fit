@@ -147,7 +147,7 @@ After `method optimize` there are no per-unit values: one set fits all, and
 
 ## NONMEM-style tables
 
-`result.tables()` returns two DataFrames; `result.tables("folder")` also writes them as CSV.
+`result.tables()` returns two DataFrames, `{"sdtab": ..., "patab": ...}`; `result.tables("folder")` also writes them as CSV.
 
 **sdtab**, one row per measurement:
 

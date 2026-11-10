@@ -28,6 +28,11 @@ def fit(problem, *, method: str | None = None, progress: str | None = None):
 
 
 def _fit(problem, *, method=None, progress=None, with_se: bool = True):
+    if method is not None and method not in METHODS:
+        raise ValueError(f"unknown method '{method}'.{nearest(method, METHODS)} Methods: "
+                         f"{', '.join(METHODS)}.")  # fmt: skip
+    if method is not None and problem._method is None:  # method= stands for the method line
+        problem = _with_method(problem, method)
     problem.check()
     name = method or problem._method.name
     if name not in METHODS:

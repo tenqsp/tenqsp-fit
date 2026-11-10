@@ -696,11 +696,14 @@ class Profile:
         return self.m2ll if self.better is None else float(self.better["-2LL"])
 
     def _set_text(self) -> str:
+        def end(v):  # an end the profile did not reach is NaN in the data, said in words here
+            return f"{v:.4g}" if np.isfinite(v) else "not reached"
+
         if len(self.pieces) > 1:
-            parts = " and ".join(f"({lo:.4g}, {hi:.4g})" for lo, hi in self.pieces)
+            parts = " and ".join(f"({end(lo)}, {end(hi)})" for lo, hi in self.pieces)
             return f"set in {len(self.pieces)} pieces {parts}"
         lo, hi = self.interval
-        return f"interval ({lo:.4g}, {hi:.4g})"
+        return f"interval ({end(lo)}, {end(hi)})"
 
     def __repr__(self) -> str:
         better = ""
@@ -849,6 +852,10 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
         far = hi_u if sign > 0 else lo_u
         if not np.isfinite(far) or (far - u_from) * sign <= 0:
             return
+        if sc[j][0] == "logit":  # the walk ended next to a bound: nothing left to scan
+            frac = lambda u: 1 / (1 + np.exp(-u))  # noqa: E731
+            if abs(frac(far) - frac(u_from)) < 1e-3:
+                return
 
         def at(h, starts, what="refining"):
             got = best_of(h, starts)
