@@ -497,7 +497,7 @@ def test_an_estimate_at_its_bound_has_no_se_and_the_others_hold_it(tmp_path):
     t = r.table().set_index("quantity")
     assert t.loc["CL", "bound"] == "lower" and t.loc["ka", "bound"] == ""
     assert np.isnan(t.loc["CL", "SE"]) and np.isnan(t.loc["CL", "CI 2.5 %"])
-    assert r.covariance_status == "ok"
+    assert r.covariance_status.startswith("conditional: CL ended at a bound")
     held = tf.fit(problem(tmp_path, estimate="ka = 1, ke = 0.1", extra="fix CL = 0.045\n",
                           options="starts=1 checks=quick"))  # fmt: skip
     h = held.table().set_index("quantity")
@@ -505,6 +505,31 @@ def test_an_estimate_at_its_bound_has_no_se_and_the_others_hold_it(tmp_path):
         np.testing.assert_allclose(t.loc[n, "estimate"], h.loc[n, "estimate"], rtol=1e-3)
         np.testing.assert_allclose(t.loc[n, "SE"], h.loc[n, "SE"], rtol=0.02)
     assert "at its lower bound" in repr(r)
+
+
+def test_near_a_bound_is_measured_against_the_estimate_not_a_wide_box():
+    """1 % of the estimate's size (or of a narrower box): 23,479 in (100, 1e8) is not at the
+    lower bound 100, though it is within 1 % of the box's width from it."""
+    nb = O.near_bounds
+    box = [(100.0, 1e8)]
+    assert nb(["B"], [23479.0], box) == {} and nb(["k"], [0.5], [(1e-9, 100.0)]) == {}
+    assert nb(["B"], [100.9], box) == {"B": ("lower", 100.0)}
+    assert nb(["B"], [0.995e8], box) == {"B": ("upper", 1e8)}
+    assert nb(["ka"], [1.299], [(1.0, 1.3)]) == {"ka": ("upper", 1.3)}  # a narrow box
+    assert nb(["ka"], [1.29], [(1.0, 1.3)]) == {}
+    assert nb(["f"], [1e-9], [(0.0, 1.0)]) == {}  # towards 0: weakly determined, not bound
+    assert nb(["ka"], [1.3], [(-np.inf, 1.3)]) == {"ka": ("upper", 1.3)}
+    assert nb(["ka"], [0.9], [(0.5, np.inf)]) == {}
+
+
+def test_a_wide_box_changes_no_standard_error(tmp_path):
+    """Boxes several decades wide around the estimates: nothing is at a bound, every SE is
+    there and is that of the fit without bounds (the 1 %-of-width test held all three)."""
+    r = tf.fit(problem(tmp_path, estimate="ka = 1 in (1e-6, 1e3), CL = 0.05 in (1e-6, 1e3), "
+                       "ke = 0.1 in (1e-6, 1e3)", options="starts=1 checks=quick"))  # fmt: skip
+    assert r.near_bounds == {} and r.covariance_status == "ok"
+    free = tf.fit(problem(tmp_path, options="starts=1 checks=quick"))
+    np.testing.assert_allclose(r.se, free.se, rtol=1e-2)
 
 
 def _value(model, name):

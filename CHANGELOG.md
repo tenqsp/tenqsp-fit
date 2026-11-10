@@ -28,6 +28,13 @@ versioning; `0.x` releases may change the API.
   `tf.prior_predictive(problem, by=...)`.
 
 ### Fixed
+- **Standard errors with a wide box.** An estimate counted as "at a bound" when it lay within
+  1 % of its box's width from it, so in a box several decades wide (`in (100, 1e8)`, as
+  written for rate constants and burdens) an estimate well inside it (23,479) was "at the
+  lower bound 100". It then got no standard error, and the others' were computed with it held
+  fixed: **too small**, under a status "ok". Near a bound now means within 1 % of the
+  estimate's or the bound's size (or of a narrower box's width); an estimate held at a bound
+  is named in `result.covariance_status`, which then begins with "conditional".
 - `tf.fit(problem, method="optimize")` refused a problem written without a `method` line
   ("no method"); `method=` now stands for it.
 - A profile whose end was not reached printed it as `nan`; it now says "not reached".

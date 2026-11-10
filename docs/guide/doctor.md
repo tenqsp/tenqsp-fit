@@ -113,11 +113,13 @@ about where it stopped.
 
 ### At a bound
 
-A **warning** when an estimate ended within 1 % of the width of its interval from a bound
-written for it (`estimate k = 0.3 in (0.01, 0.4)`), as NONMEM's "near its boundary"; for a
-bound on one side (`in (1, inf)`), within 1 % of the bound's or the estimate's size. It is
-also a Python warning when the fit ends. Such an estimate has no standard error, and the
-others' are computed with it held at the bound (see [results](results.md)).
+A **warning** when an estimate ended near a bound written for it (`estimate k = 0.3 in
+(0.01, 0.4)`), as NONMEM's "near its boundary": within 1 % of the bound's or the estimate's
+size, or of the interval's width if that is smaller. A box several decades wide, as often
+written for a rate constant (`in (1e-9, 100)`), does not make an estimate inside it "at a
+bound": 0.5 is not near 1e-9. It is also a Python warning when the fit ends. Such an estimate
+has no standard error, and the others' are computed with it held at the bound; the standard
+errors' status says so (see [results](results.md)).
 
 ```text
 warning  at a bound: k ended at 0.4, near its upper bound 0.4: the bound may be too tight, or the data do not determine k. Widen the bound, or fix k.

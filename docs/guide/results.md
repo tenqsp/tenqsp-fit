@@ -69,10 +69,11 @@ not counted).
 The scale of each quantity is listed by `problem.summary()` (`scales`).
 
 **An estimate at a bound** written for it (`estimate k = 0.3 in (0.01, 0.4)`; within 1 % of
-the interval's width) has no standard error or interval: the curvature there does not describe
+its own size or the bound's, or of the interval's width if that is smaller) has no standard error or interval: the curvature there does not describe
 it, and a likelihood-ratio test against a value on the bound does not follow the usual
 chi-square. The other quantities' standard errors are computed with it held at the bound, as
-if it were fixed there. The doctor warns about it. Report such an estimate as "at the bound",
+if it were fixed there, and `result.covariance_status` begins with "conditional" and names it.
+The doctor warns about it. Report such an estimate as "at the bound",
 and use a [profile](#profile-likelihood) for what the data say about it.
 
 **Shrinkage** (with parameters that vary between units): 1 minus the SD of the units' normal

@@ -209,6 +209,10 @@ def _determination(result) -> list[Finding]:
         out.append(Finding("standard errors", "problem", status + ".",
                            "see the ridge below, if any; otherwise check that the fit "
                            "converged (result.plot_trace())."))  # fmt: skip
+    elif status.startswith("conditional"):
+        out.append(Finding("standard errors", "note", status + ".",
+                           "if the bound is not part of the model, widen it, or fix the "
+                           "quantity and say so."))  # fmt: skip
     if H.ndim != 2 or not np.all(np.isfinite(H)):
         return out
     names, sc = list(result.names), result.scales
