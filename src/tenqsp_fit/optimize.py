@@ -160,22 +160,20 @@ def _spread(sc, x0) -> np.ndarray:
 
 
 # ----------------------------------------------------------------------------- bounds
-NEAR_BOUND = 0.01  # an estimate within 1 % of its interval's width from a bound
+NEAR_BOUND = 0.01  # an estimate within 1 % of its own size (or of a narrower box) from a bound
 
 
 def near_bounds(names, x, bounds) -> dict[str, tuple[str, float]]:
     """Estimates that ended near a bound written for them: ``{name: ("lower" or "upper",
-    bound)}``. Within 1 % of the interval's width; for a bound on one side, within 1 % of the
-    larger of the bound and the estimate (in size)."""
+    bound)}``. Near: within 1 % of the larger of the bound and the estimate (in size), or of
+    the interval's width if that is smaller. Not 1 % of the width alone: in a box several
+    decades wide, such as (100, 1e8), that would call 23,479 "at the lower bound 100"."""
     out = {}
     for n, v, (lo, hi) in zip(names, x, bounds, strict=True):
-        if np.isfinite(lo) and np.isfinite(hi):
-            width = hi - lo
-        else:
-            width = max(abs(b) for b in (lo, hi, v) if np.isfinite(b))
-        if np.isfinite(lo) and v - lo <= NEAR_BOUND * width:
+        width = hi - lo if np.isfinite(lo) and np.isfinite(hi) else np.inf
+        if np.isfinite(lo) and v - lo <= NEAR_BOUND * min(width, max(abs(lo), abs(v))):
             out[n] = ("lower", float(lo))
-        elif np.isfinite(hi) and hi - v <= NEAR_BOUND * width:
+        elif np.isfinite(hi) and hi - v <= NEAR_BOUND * min(width, max(abs(hi), abs(v))):
             out[n] = ("upper", float(hi))
     return out
 
@@ -215,14 +213,39 @@ def no_covariance(p: int, status: str | None = None) -> dict:
                 covariance_status=status or STOPPED_SE, hessian_u=nan)  # fmt: skip
 
 
-def covariance(value, u, sc, *, gradient=None, held=()) -> dict:
+def _inverse(H, keep) -> np.ndarray | None:
+    """2 H^-1 over the quantities ``keep`` (NaN elsewhere), or None if that part of H is not
+    positive definite (or only by round-off: an exact ridge)."""
+    keep = np.asarray(list(keep), dtype=int)
+    p = len(H)
+    cov_u = np.full((p, p), np.nan)
+    if not len(keep):
+        return None
+    Hk = H[np.ix_(keep, keep)]
+    if not np.all(np.isfinite(Hk)):
+        return None
+    try:
+        np.linalg.cholesky(Hk)
+        eig = np.linalg.eigvalsh(Hk)
+        if eig[0] <= SINGULAR * eig[-1]:
+            return None
+        ck = 2.0 * np.linalg.inv(Hk)
+    except np.linalg.LinAlgError:
+        return None
+    if not np.all(np.isfinite(np.diag(ck)) & (np.diag(ck) > 0)):
+        return None
+    cov_u[np.ix_(keep, keep)] = ck
+    return cov_u
+
+
+def covariance(value, u, sc, *, gradient=None, held=(), names=None) -> dict:
     """Standard errors from the Hessian of -2LL on the estimation scale, by central
     differences of the values (or of a ``gradient``, when there is one; NONMEM's covariance
     step, R matrix): covariance = 2 H^-1, carried to the reported scale. Returns
     ``se``, ``ci`` (95 %, carried from the estimation scale), ``cov_u`` and
-    ``covariance_status``. ``held``: the indices of estimates at a bound; they have no
-    standard error, and the others' come from the Hessian without them (held where they
-    are)."""
+    ``covariance_status``. ``held``: the indices of estimates at a bound (``near_bounds``);
+    they have no standard error, the others' come from the Hessian without them (held where
+    they are), and ``covariance_status`` names them."""
     u = np.asarray(u, float)
     p, h = len(u), FD_STEP
     E = np.eye(p) * h
@@ -255,21 +278,17 @@ def covariance(value, u, sc, *, gradient=None, held=()) -> dict:
         H = np.triu(H) + np.triu(H, 1).T
     workers.shutdown()
     H = 0.5 * (H + H.T)
-    status = "ok"
-    keep = np.array([i for i in range(p) if i not in set(held)], dtype=int)
-    cov_u = np.full((p, p), np.nan)
-    try:
-        if len(keep):
-            Hk = H[np.ix_(keep, keep)]
-            np.linalg.cholesky(Hk)
-            eig = np.linalg.eigvalsh(Hk)
-            if eig[0] <= SINGULAR * eig[-1]:  # positive only by round-off: an exact ridge
-                raise np.linalg.LinAlgError
-            ck = 2.0 * np.linalg.inv(Hk)
-            if not np.all(np.isfinite(np.diag(ck)) & (np.diag(ck) > 0)):
-                raise np.linalg.LinAlgError
-            cov_u[np.ix_(keep, keep)] = ck
-    except np.linalg.LinAlgError:
+    held = sorted(set(held))
+    cov_u, status = _inverse(H, [i for i in range(p) if i not in held]), "ok"
+    if held:
+        which = ", ".join(f"no. {i + 1}" if names is None else names[i] for i in held)
+        it = "it" if len(held) == 1 else "them"
+        status = (
+            f"conditional: {which} ended at a bound and {'has' if len(held) == 1 else 'have'} "
+            f"no standard error (one assumes the estimate could move both ways); the others' "
+            f"are computed with {it} held there"
+        )
+    if cov_u is None:
         cov_u = np.full((p, p), np.nan)
         status = (
             "failed: the Hessian of -2LL is not positive definite at the estimates (some "
@@ -371,8 +390,9 @@ class Result:
         """Estimates with standard errors, RSE % (100 SE / |estimate|) and 95 % intervals
         (from the estimation scale, so a positive quantity's interval stays positive); for a
         distribution's spread, the other usual forms alongside (a lognormal's sdlog, CV and
-        variance, NONMEM's OMEGA); ``bound``: "lower" or "upper" for an estimate at a bound
-        written for it (no SE or interval; the others' are computed with it held there)."""
+        variance, NONMEM's OMEGA); ``bound``: "lower" or "upper" for an estimate near a bound
+        written for it (no SE or interval; the others' are computed with it held there, and
+        ``covariance_status`` says so)."""
         se = getattr(self, "se", np.full(len(self.names), np.nan))
         ci = getattr(self, "ci", np.full((len(self.names), 2), np.nan))
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -770,7 +790,7 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
         at = near_bounds(names, run.X[best], user_bounds(problem, names))
         cov = covariance(None, to_u(run.X[best], sc), sc,
                          gradient=lambda u: gradient(jnp.asarray(u)),
-                         held=[names.index(n) for n in at])  # fmt: skip
+                         held=[names.index(n) for n in at], names=names)  # fmt: skip
     return finish(problem, obj, "optimize", "Levenberg-Marquardt" if least_squares else "BFGS",
                   names, x0, sc, U_start, run, final, redrawn, user_bounds(problem, names),
                   t_start, objective=obj, rank=rank,
