@@ -8,7 +8,7 @@
 **Fitting [TenQSP](https://github.com/tenqsp/tenqsp) models to data, with a diagnosis of what
 the data can and cannot determine.**
 
-Version 0.1, the first release. It fits individual and population models by optimization
+It fits individual and population models by optimization
 (`method optimize`), the Laplace approximation (`method laplace`, FOCE-I) and NUTS
 (`method nuts`); reports ridges and what the data cannot determine (the doctor, profile
 likelihoods); and gives predictions with their uncertainty and visual predictive checks.
