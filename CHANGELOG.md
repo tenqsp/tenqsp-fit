@@ -5,6 +5,13 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+### Added
+- **Models given by formulas of t** (NONMEM's `$PRED`; needs the TenQSP release that adds
+  them): a model with no equations and outputs written as formulas, fitted by every method
+  with no solver. A dose enters as a parameter set from a data column (`D = DOSE`); `doses`
+  lines and dose rows are refused, with that way out in the message. The summary and
+  `doctor()` say that no solver runs.
+
 ## [0.2.1] — 2026-11-10
 
 ### Added

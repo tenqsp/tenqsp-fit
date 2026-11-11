@@ -131,6 +131,36 @@ estimate CL ~ lognormal(median=CL_pop*(WT/70)^0.75, cv=0.3)
 
 Each unit's CL is then lognormal around `CL_pop*(WT/70)^0.75` for its own weight.
 
+## Models given by formulas
+
+A model with no differential equations, its outputs written as formulas of `t` (NONMEM's
+`$PRED`), is fitted like any other. No solver runs, so fits are fast and the doctor's
+tolerance check is not needed. A dose is a parameter of the formula, set from a data column
+by a formula line:
+
+```text
+model theoph_sd
+param D = 4, ka = 1.6, CL = 0.04, ke = 0.086
+observable conc = D*ka*ke/(CL*(ka - ke))*(exp(-ke*t) - exp(-ka*t))
+
+fit theoph_sd_pop
+data "theoph.csv" with ID=Subject, TIME=Time, DV=conc
+unit ID
+D = Dose
+observe conc = DV
+estimate ka ~ lognormal(median=1.5, sdlog=0.5)
+estimate CL ~ lognormal(median=0.04, sdlog=0.5)
+estimate ke = 0.08
+error conc ~ additive(1)
+method laplace
+```
+
+On R's theophylline data this gives the same estimates and standard errors as the model
+written with equations and a `doses` line, about ten times faster. A `doses` line, or dose
+rows in the data, are refused for such a model: there is no state to put a dose into. Several
+doses are written into the formula ([TenQSP: models given by
+formulas](https://tenqsp.github.io/tenqsp/guide/formulas/)).
+
 ## Correlations
 
 `correlate ka, CL` estimates the correlation of ka and CL between units, from 0 (or from

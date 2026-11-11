@@ -159,7 +159,11 @@ def examine(result, *, quick: bool | None = None, say=None) -> Doctor:
     elif result.status != "stopped":
         try:
             say("checking the fit: the solver tolerance and the gradients ...")
-            out += _tolerance_nuts(result) if nuts else _tolerance(result)
+            if result.problem._m.n_states == 0:  # a model given by formulas of t
+                out.append(Finding("tolerance check", "note", "not needed: the model is given "
+                                   "by formulas of t, so no solver runs."))  # fmt: skip
+            else:
+                out += _tolerance_nuts(result) if nuts else _tolerance(result)
             if result.method != "laplace":
                 out += _gradients_nuts(result) if nuts else _gradients(result)
         except KeyboardInterrupt:
