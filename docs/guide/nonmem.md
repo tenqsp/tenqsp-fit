@@ -86,6 +86,7 @@ near zero  kept above 0 by a smooth floor at 1e-6 (the solver's atol): f in conc
 | doses into a compartment (`CMT`, `DEFDOSE`) | `doses CMT 1 into depot, 2 into centr`, or `doses into depot` for every dose row |
 | several observation types (`DVID`, `CMT` on observation rows) | one `observe` line each: `observe conc = DV where DVID == 1` |
 | `$PK`, `$DES`, `$ERROR`'s prediction | the TenQSP model above the `fit` line: parameters, equations, observables |
+| `$PRED` (no `$DES`, no doses handled) | a TenQSP model with no equations, its observables written as formulas of `t` ([models given by formulas](estimates.md#models-given-by-formulas)); a dose is a parameter set from a column, `D = DOSE` |
 | a covariate relation in `$PK` | a formula in the distribution, `lognormal(median=CL_pop*(WT/70)^0.75, ...)`, or a formula line ([estimates and distributions](estimates.md)) |
 | `THETA` | `estimate ke = 0.08`; a typical value of a varying parameter is its distribution's `median` (lognormal) or `mean` (normal) |
 | bounds `(lo, init, hi)` | `estimate ka = 1.5 in (0.1, 10)` |
