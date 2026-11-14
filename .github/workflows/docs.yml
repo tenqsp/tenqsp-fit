@@ -1,11 +1,12 @@
 name: Docs
 
-# Builds the site on every pull request that touches it (a broken link or a missing page fails)
-# and publishes it to GitHub Pages from main. Public repository only.
+# Builds the site on every pull request (a broken link or a missing page fails) and publishes
+# it to GitHub Pages when a release is published, from that release's tag, so the site always
+# describes the version on PyPI. Run by hand to republish from a release tag. Public repository only.
 on:
-  push:
-    branches: [main]
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -35,7 +36,7 @@ jobs:
           path: site
 
   deploy:
-    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v')) }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
