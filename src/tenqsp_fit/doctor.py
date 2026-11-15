@@ -336,7 +336,8 @@ def _groups(flat):
     for item in flat:
         joined = [g for g in groups if set(item[2]) & {n for _, _, q in g for n in q}]
         merged = [item] + [x for g in joined for x in g]
-        groups = [g for g in groups if g not in joined] + [merged]
+        # by identity: a group holds arrays (the directions), which == compares entrywise
+        groups = [g for g in groups if not any(g is j for j in joined)] + [merged]
     return groups
 
 

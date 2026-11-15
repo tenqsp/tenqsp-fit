@@ -15,6 +15,11 @@ versioning; `0.x` releases may change the API.
 - **Needs TenQSP 0.8.2 or later** (models given by formulas came in 0.8.1; 0.8.2 fixes
   derivatives that 0.8.1 resolved too coarsely, which could make standard errors fail).
 
+### Fixed
+- A fit whose estimates have two or more directions in which -2LL does not change (or
+  hardly) stopped with "The truth value of an array with more than one element is
+  ambiguous" when the doctor grouped them, instead of reporting them.
+
 ## [0.2.1] — 2026-11-10
 
 ### Added
