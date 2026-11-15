@@ -407,6 +407,8 @@ class Problem:
         (the dose as a column of the data, given once per unit at time ``at``). A place is a
         compartment or one element of a field over categorical axes, ``"C[phage=a]"``. Doses
         given as columns may take several statements, one per place."""
+        if self._m.n_states == 0:
+            raise ValueError(f"doses: {formula_model_doses(self._m.name)}")
         if self._doses and not (
             column is not None and all(d.column is not None for d in self._doses)
         ):
@@ -1667,6 +1669,13 @@ class Problem:
         rows = D.dose_rows(df)
         d = self._doses[0] if self._doses else None
         if d is None:
+            if rows.any() and self._m.n_states == 0:
+                out.append(
+                    f"The data have {int(rows.sum())} dose rows (AMT), but "
+                    + formula_model_doses(self._m.name)
+                    + " Leave the dose rows out of the data (or give them EVID 2)."
+                )
+                return out
             if rows.any():
                 lines = [
                     f"The data have {int(rows.sum())} dose rows (AMT), but no doses line "
@@ -1732,7 +1741,11 @@ class Problem:
         unit = self._unit
         n_units = df[unit].nunique() if (df is not None and unit) else 1
         out = []
-        head = f"{self.name}: model {m.name} ({m.n_states} state{'' if m.n_states == 1 else 's'})"
+        head = f"{self.name}: model {m.name} " + (
+            f"({m.n_states} state{'' if m.n_states == 1 else 's'})"
+            if m.n_states
+            else "(given by formulas of t: no states, no solver)"
+        )
         if df is not None:
             obs, doses = D.observation_rows(df), D.dose_rows(df)
             src = f'"{self._data.source}"' if self._data.source else "a table given in Python"
@@ -2065,3 +2078,12 @@ def _opt(v) -> str:
 
 def _param_value(v) -> str:
     return _num(v) if isinstance(v, int | float) else str(v)
+
+
+def formula_model_doses(model: str) -> str:
+    """Why a model given by formulas of t takes no doses, and what to write instead."""
+    return (
+        f"the model {model} has no states (it is given by formulas of t), so a dose has nowhere "
+        "to go. Put the dose in a formula of the model as a parameter (D, say) and set it from "
+        "a data column, one value per unit: D = DOSE."
+    )

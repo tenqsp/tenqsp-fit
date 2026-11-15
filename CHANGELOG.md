@@ -5,6 +5,16 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+### Added
+- **Models given by formulas of t** (NONMEM's `$PRED`): a model with no equations and
+  outputs written as formulas, fitted by every method with no solver. A dose enters as a
+  parameter set from a data column (`D = DOSE`); `doses` lines and dose rows are refused,
+  with that way out in the message. The summary and `doctor()` say that no solver runs.
+
+### Changed
+- **Needs TenQSP 0.8.2 or later** (models given by formulas came in 0.8.1; 0.8.2 fixes
+  derivatives that 0.8.1 resolved too coarsely, which could make standard errors fail).
+
 ### Fixed
 - A fit whose estimates have two or more directions in which -2LL does not change (or
   hardly) stopped with "The truth value of an array with more than one element is
