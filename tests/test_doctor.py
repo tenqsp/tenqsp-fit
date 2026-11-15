@@ -188,12 +188,13 @@ def test_passport(pk_fit, tmp_path):
 
 
 def test_flat_directions_sharing_quantities_are_one_finding():
-    a = (0.0, None, ["k", "beta"])
-    b = (0.0, None, ["beta", "k"])
-    c = (0.0, None, ["s"])
+    """Each direction is an array, as in a fit (comparing groups by == failed on them)."""
+    a = (0.0, np.array([1.0, 1.0]), ["k", "beta"])
+    b = (0.0, np.array([1.0, -1.0]), ["beta", "k"])
+    c = (0.0, np.array([0.0, 1.0]), ["s"])
     groups = Dr._groups([a, c, b])
     assert sorted(len(g) for g in groups) == [1, 2]
-    d = (0.0, None, ["s", "tau"])
+    d = (0.0, np.array([1.0, 0.5]), ["s", "tau"])
     assert len(Dr._groups([a, c, b, d])) == 2  # s joins tau; k, beta apart
 
 
