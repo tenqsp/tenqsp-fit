@@ -305,8 +305,11 @@ def lkj_draw(rng: np.random.Generator, dim: int, n: int, eta: float = LKJ_ETA) -
 def written_penalty(problem, names, x0, scales):
     """-2 log of the written priors as a JAX function of x (the term ``optimize`` and
     ``laplace`` add to -2LL, so their estimates are the posterior mode), or None when no prior
-    is written."""
-    ps = priors(problem, names, x0, scales, defaults=False)[0]
+    is written. The priors are those of the statistical scales (``optimize.statistical``),
+    whatever scales the fit works on."""
+    from .optimize import statistical
+
+    ps = priors(problem, names, x0, statistical(scales), defaults=False)[0]
     if not ps:
         return None
     index = {n: i for i, n in enumerate(names)}

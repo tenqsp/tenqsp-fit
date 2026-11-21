@@ -250,7 +250,7 @@ Passport: theoph_pop
 
 The run
 -------
-problem theoph_pop: method laplace (BFGS, FOCE-I), converged
+problem theoph_pop: method laplace (L-BFGS-B, FOCE-I), converged
 -2LL 353.9837 (132 measurements, 12 units)
 options: none written (rtol 1e-06 unless written)
 problem text (model and fit) SHA-256 722cbb35c100a7808acc33040fe26d8ef91eace6d5ee787667b7777ee36f38eb
@@ -258,7 +258,7 @@ data file theoph.csv SHA-256 6536b3614f8d34de4de407a7f28b26657038e1e0239c704d7e4
 columns: ID=Subject, TIME=Time, DV=conc
 rows: 132; measurements 132, linked 132; doses 12
 data as read SHA-256 a1d839ceef82514b7de1befce5e24e811ebcc9b2868a5dd238b68e2431a608f9
-versions: tenqsp_fit 0.2.1, tenqsp 0.8.0, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1, optimistix 0.1.0, numpyro 0.22.0, arviz_stats 1.3.3
+versions: tenqsp_fit 0.2.1, tenqsp 0.8.0, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1, numpyro 0.22.0, arviz_stats 1.3.3
 platform Linux x86_64; 41 s
 all units run as one build of the model (TenQSP pads the shorter ones with slots at t = +inf; this changes the results by about the solver's tolerance)
 

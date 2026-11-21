@@ -486,7 +486,7 @@ def test_one_sided_bounds_text_and_python():
     p = tf.Problem.from_text(PK + fit)
     assert "estimate ke = 0.08 in (0.001, inf)" in p.to_text()
     assert "estimate ka = -2 in (-inf, 0)" in p.to_text()
-    assert "above a bound: ke; below a bound: ka" in p.summary()
+    assert "log scale, bounded: ke; as is, bounded: ka" in p.summary()
     q = tf.Problem(tq.Model.from_text(PK), name="b")
     q.estimate("ke", 0.08, bounds=(0.001, None))
     q.estimate("ka", -2, bounds=(-np.inf, 0))

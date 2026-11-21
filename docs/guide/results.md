@@ -12,7 +12,7 @@ print(result)
 ```
 
 ```text
-theoph_pop: method laplace (BFGS, FOCE-I), converged; -2LL 353.9837 (132 measurements, 12 units)
+theoph_pop: method laplace (L-BFGS-B, FOCE-I), converged; -2LL 353.9837 (132 measurements, 12 units)
 starts: 1; 1 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 41 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also

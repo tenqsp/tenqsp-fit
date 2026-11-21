@@ -165,7 +165,7 @@ def test_fit_reaches_the_maximum_likelihood(tmp_path):
     assert len(ind) == 8 and np.allclose(ind.k, r.estimates["k"])
     assert set(r.shrinkage) == {"A", "B"}
     text = repr(r)
-    assert "method laplace (BFGS, FOCE-I), converged" in text and "8 units" in text
+    assert "method laplace (L-BFGS-B, FOCE-I), converged" in text and "8 units" in text
     assert "shrinkage (1 - SD of the units' scores): A" in text
 
 

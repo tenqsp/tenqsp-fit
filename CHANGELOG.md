@@ -17,6 +17,35 @@ versioning; `0.x` releases may change the API.
   `cache=off`, or `TENQSP_FIT_CACHE` set to empty, turns it off.
 
 ### Changed
+- **TenQSP's native solver** (`options backend=auto`, the default): the units' simulations
+  run on TenQSP's BDF compiled by numba wherever the model allows it (forward derivatives, no
+  events or conditions on time), else on JAX; estimates agree with the JAX solver to
+  round-off. A population fit of Friberg's model to 20 patients: 44 s with JAX, 9 s native.
+  The first fit of a model compiles its solver once (cached on disk). `backend=jax` or
+  `backend=native` chooses. Needs TenQSP 0.9 (which brings it); numba is now a dependency.
+- **The setup compiles less**: the fit's one compiled function (value, gradient and the
+  run's steps, with the tolerances and the step limit as inputs) also serves the standard
+  errors and the doctor's checks, and the step limit is set from the fit's first run instead
+  of a separate run and build.
+- **Profiles stay within the bounds** of the quantity profiled (walk and scan).
+- **Bounds are kept as bounds** (ADR 0006): `method optimize` uses L-BFGS-B on −2LL (or
+  trust-region least squares where −2LL is a sum of squares), and `method laplace` and
+  profiles use the same optimizer, all from SciPy, instead of Optimistix and BFGS on scales
+  that mapped bounds away (the logit). On those scales a quantity pushed near a bound could
+  not come back: fits ended on a bound, with a near-bound warning, above the optimum (in one
+  fit 4.3 above it in −2LL). **Fits can end at a lower −2LL than before, and estimates near
+  a bound change.** A bounded quantity is now estimated on the log scale when its lower bound
+  is 0 or above, else as it is; the summary says `log scale, bounded` or `as is, bounded`.
+  Default priors and NUTS keep their scales.
+- **A start ends when −2LL stops moving**: also when its last 5 steps lowered −2LL by less
+  than 1e-4 in all (before, 1e-8 on −2LL and on the parameters, which a stiff model's −2LL,
+  carrying an integration error of order 1 at the default tolerance, kept from being met:
+  one fit spent most of its time lowering −2LL by less than 1).
+- **A rejected step costs one run**, not two (the point was run again to ask whether the
+  model ran there). A start whose derivatives are not finite is drawn again.
+- **The doctor's ridges leave out quantities at a bound**: an active bound is a result, not
+  something the data fail to determine.
+- **Needs SciPy 1.16 or later; no longer needs Optimistix.**
 - **`method laplace` is faster** (ADR 0005): the objective is compiled once for the fit, the
   standard errors, the modes and the doctor (it was compiled four times); the inner fit takes
   one run of the units per step (Fisher scoring) and starts from the modes predicted at the

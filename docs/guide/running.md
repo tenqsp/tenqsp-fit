@@ -36,7 +36,7 @@ can be stopped the same way.
 such as `90s`, `30min`, `2h`; off by default). The theophylline fit with `timeout=20s`:
 
 ```text
-theoph_pop: method laplace (BFGS, FOCE-I), stopped; -2LL 359.8725 (132 measurements, 12 units)
+theoph_pop: method laplace (L-BFGS-B, FOCE-I), stopped; -2LL 359.8725 (132 measurements, 12 units)
 starts: 1; 1 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 28 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also
@@ -80,6 +80,7 @@ or in Python, `problem.options(starts=4, seed=1, rtol=1e-8)`. Every option and i
 | `checks` | `full` | `quick` leaves out the doctor's tolerance and gradient checks |
 | `timeout` | off | a time limit, as above |
 | `cache` | `on` | keep the compiled model on disk, so the same problem fitted again does not compile (below) |
+| `backend` | `auto` | the solver: TenQSP's native CPU solver where the model allows it, else JAX (`native`, `jax` to choose; below) |
 
 `method nuts` has its own options on the method line: `method nuts chains=4 warmup=1000
 samples=1000 target_accept=0.9` (those are the defaults; see [NUTS](../methods/nuts.md)).
@@ -152,6 +153,24 @@ many small operations, which run faster that way, and several starts still run s
 on separate cores. It leaves `XLA_FLAGS` alone when you have set it (to anything, also
 empty), and cannot change it once JAX has started (import tenqsp-fit before running anything
 in JAX). The setting holds for the whole Python session.
+
+## The solver: native or JAX
+
+The units' simulations run on TenQSP's native CPU solver (TenQSP's BDF compiled by numba)
+wherever the model allows it: forward sensitivities, no events (extinction thresholds,
+conditions on the state) and no conditions on time. It takes the same steps as TenQSP's JAX
+solver, so estimates agree to round-off, and each run is many times faster on the CPU (a
+population fit of Friberg's myelosuppression model to 20 patients: 9 s instead of 44 s; a
+model with about a hundred states, 6 runs with 5 derivatives: 0.3 s instead of 4.8 s). The first
+fit of a model compiles its native solver once (about 20 s for a small model, under a minute
+for a large one); the compiled code is kept on disk (`~/.cache/tenqsp/native`) and later fits
+load it. Elsewhere the JAX solver runs. `options backend=jax` chooses JAX, `backend=native`
+asks for the native solver and says why when the model cannot use it; `result.objective.backend`
+says which one ran.
+
+With the native solver, `method laplace` computes its gradient by differences of the
+sensitivities instead of exact second derivatives (the native solve gives first derivatives):
+the estimates are the same, and the fit is still much faster.
 
 ## How long it takes
 

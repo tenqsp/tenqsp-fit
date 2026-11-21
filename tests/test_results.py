@@ -300,7 +300,7 @@ def test_the_run_record_has_the_versions_of_the_optimizers_and_nuts(pooled):
     from tenqsp_fit.results import run_record
 
     versions = run_record(pooled)["versions"]
-    assert {"tenqsp_fit", "tenqsp", "jax", "scipy", "optimistix", "numpyro",
+    assert {"tenqsp_fit", "tenqsp", "jax", "scipy", "numpyro",
             "arviz_stats"} <= set(versions)  # fmt: skip
     assert versions["tenqsp_fit"] == tf.__version__
 

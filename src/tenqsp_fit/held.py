@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .optimize import BAD, BAD_VALUE, DEFAULT_MAXITER, TOL, capped, to_x
+from .optimize import BAD, BAD_VALUE, DEFAULT_MAXITER, minimize_bounded, to_x
 from .priors import written_penalty
 
 
@@ -35,59 +35,57 @@ def _full(v, h, j):
 
 
 def _optimize(result, j):
-    import optimistix as optx
-
     obj, sc, problem = result.objective, result.scales, result.problem
     maxiter = int(problem._options.get("maxiter") or DEFAULT_MAXITER)
     penalty = written_penalty(problem, result.names, np.asarray(result.x0, float), sc)
-    if obj.sum_of_squares and penalty is None:  # as the fit: least squares
+    others = sc[:j] + sc[j + 1 :]
+    least_squares = obj.sum_of_squares and penalty is None  # as the fit
+    if least_squares:
 
-        def fn(v, h):
-            r = obj._residuals(to_x(_full(v, h, j), sc))
-            return jnp.where(jnp.all(jnp.isfinite(r)), r, BAD)
+        def res(v, h):
+            return obj._residuals(to_x(_full(v, h, j), sc))
 
-        solver = capped(optx.LevenbergMarquardt(rtol=TOL, atol=TOL), sc[:j] + sc[j + 1 :])
-
-        def solve(v0, h):
-            return optx.least_squares(fn, solver, v0, args=h, max_steps=maxiter, throw=False)
+        both = jax.jit(lambda v, h: (res(v, h), jax.jacfwd(res)(v, h)))
     else:
 
-        def fn(v, h):
+        def total(v, h):
             x = to_x(_full(v, h, j), sc)
-            f = obj._minus2ll(x) + (0.0 if penalty is None else penalty(x))
-            return jnp.where(jnp.isfinite(f), f, BAD_VALUE)
+            return obj._minus2ll(x) + (0.0 if penalty is None else penalty(x))
 
-        solver = capped(optx.BFGS(rtol=TOL, atol=TOL), sc[:j] + sc[j + 1 :])
-
-        def solve(v0, h):
-            return optx.minimise(fn, solver, v0, args=h, max_steps=maxiter, throw=False)
-
-    @jax.jit
-    def run(v0, h):  # arrays only out of jit (see fit_optimize on memory maps)
-        sol = solve(v0, h)
-        return sol.value, sol.result == optx.RESULTS.successful
+        both = jax.jit(jax.value_and_grad(total))
 
     def fit(h, start, warm=None):
-        v, ok = run(jnp.asarray(np.delete(start, j)), jnp.asarray(h, float))
-        u = np.asarray(_full(v, h, j))
+        hh = jnp.asarray(h, float)
+
+        def fun(v):
+            a, g = both(jnp.asarray(v), hh)
+            a, g = np.asarray(a, float), np.asarray(g, float)
+            if not np.all(np.isfinite(a)) or not np.all(np.isfinite(g)):  # no derivatives
+                if least_squares:
+                    return np.full_like(a, BAD), np.zeros_like(g)
+                return BAD_VALUE, np.zeros_like(g)
+            return (a, g) if least_squares else (float(a), g)
+
+        r = minimize_bounded(fun, np.delete(start, j), others, maxiter,
+                             least_squares=least_squares)  # fmt: skip
+        u = np.asarray(_full(jnp.asarray(r["u"]), hh, j))
         x = to_x(jnp.asarray(u), sc)
         m2ll = float(obj(x)) + (0.0 if penalty is None else float(penalty(x)))
-        status = "converged" if bool(ok) else "max iterations"
+        status = "converged" if r["converged"] else "max iterations"
         return u, (m2ll if np.isfinite(m2ll) else np.nan), status, warm
 
     return fit
 
 
 def _laplace(result, j):
-    from scipy.optimize import minimize
-
-    from .laplace import GTOL, _Warm
+    from .laplace import _Warm
 
     lap, sc, problem = result.objective, result.scales, result.problem
     maxiter = int(problem._options.get("maxiter") or DEFAULT_MAXITER)
     penalty = written_penalty(problem, result.names, np.asarray(result.x0, float), sc)
     pen = (lambda u: 0.0) if penalty is None else jax.jit(lambda u: penalty(to_x(u, sc)))
     pen_grad = (lambda u: 0.0) if penalty is None else jax.jit(jax.grad(pen))
+    others = sc[:j] + sc[j + 1 :]
 
     def fit(h, start, warm=None):
         Z = _Warm(result.modes if warm is None else warm)
@@ -102,14 +100,15 @@ def _laplace(result, j):
             Z.seen(u, Zh, dz)
             return f, g
 
-        res = minimize(fun, np.delete(start, j), jac=True, method="BFGS",
-                       callback=lambda intermediate_result: Z.accept(
-                           np.insert(intermediate_result.x, j, h)),
-                       options={"gtol": GTOL, "maxiter": maxiter})  # fmt: skip
-        u = np.insert(res.x, j, h)
+        r = minimize_bounded(fun, np.delete(start, j), others, maxiter,
+                             accepted=lambda v, f: Z.accept(np.insert(v, j, h)))  # fmt: skip
+        u = np.insert(r["u"], j, h)
         m2ll = float(lap(to_x(jnp.asarray(u), sc))) + float(pen(jnp.asarray(u)))
-        done = bool(res.success) or float(np.max(np.abs(res.jac))) < 10 * GTOL
-        status = "converged" if done else ("max iterations" if res.nit >= maxiter else "ended")
+        status = (
+            "converged"
+            if r["converged"]
+            else ("max iterations" if r["message"] == "max iterations" else "ended")
+        )
         return u, (m2ll if np.isfinite(m2ll) else np.nan), status, Z.Z
 
     return fit

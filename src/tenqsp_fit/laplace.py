@@ -29,8 +29,8 @@ one run of the units, which gives the trial point's value, its gradient by the s
 together. It starts from the modes the implicit function theorem predicts from the last point
 (``z^ + dz^/du du``, below), so near the optimum a few iterations suffice.
 
-**The outer fit.** BFGS (SciPy) on the estimation scales of ``method optimize`` (log, logit
-within bounds; a correlation within (-1, 1)), as NONMEM minimizes the FOCE objective itself.
+**The outer fit.** L-BFGS-B (SciPy) on the estimation scales of ``method optimize``, bounds
+kept as bounds (ADR 0006), as NONMEM minimizes the FOCE objective itself.
 The gradient follows the implicit function theorem:
 ``dO/du = dF/du + dF/dz dz^/du`` with ``dz^/du = -(d2g/dz2)^-1 d2g/dz du``. It needs the
 predictions' first and second derivatives by each unit's model parameters ``P_i``: one run of
@@ -68,7 +68,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
 
 from .likelihood import Objective
 from .live import default_progress
@@ -82,10 +81,11 @@ from .optimize import (
     covariance,
     draw_starts,
     finish,
+    fit_scales,
     locked_show,
+    minimize_bounded,
     near_bounds,
     no_covariance,
-    scales,
     to_u,
     to_x,
     user_bounds,
@@ -95,7 +95,6 @@ from .problem import seconds
 
 __all__ = ["Laplace"]
 
-GTOL = 1e-3  # BFGS: the largest derivative of -2LL on the estimation scale at the end
 FD_GRAD = 1e-4  # central differences for the gradient, on the estimation scale
 INNER_TOL = 1e-8  # the conditional modes: the largest step of a score
 INNER_MAXITER = 100  # Fisher-scoring iterations, one run of the units each
@@ -140,7 +139,7 @@ class Laplace:
             for i, a in enumerate(c.names)
             for b in c.names[i + 1 :]
         ]
-        self.scales = scales(self.names, np.asarray(self.x0, float), self.bounds, self.kinds)
+        self.scales = fit_scales(self.names, np.asarray(self.x0, float), self.bounds, self.kinds)
         p = len(self.names)
         # the gradient through the units' quadratic predictions (one run with w + w^2
         # derivatives), unless differences in the estimates take fewer runs; the solver may
@@ -527,28 +526,23 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
                 trace.append((j + 1, 0, v, *np.asarray(to_x(jnp.asarray(u), sc))))
             return v, g
 
-        def callback(intermediate_result):  # scipy passes the step by this name
-            res = intermediate_result
-            warm.accept(res.x)
-            fj, xj = float(res.fun), np.asarray(to_x(jnp.asarray(res.x), sc))
+        def accepted(u, f):
+            warm.accept(u)
+            xj = np.asarray(to_x(jnp.asarray(u), sc))
             with lock:
                 steps[j] += 1
-                m2ll[j], X[j] = fj, xj
-            trace.append((j + 1, int(steps[j]), fj, *xj))
+                m2ll[j], X[j] = f, xj
+            trace.append((j + 1, int(steps[j]), f, *xj))
 
         try:
-            res = minimize(fun, U_start[j], jac=True, method="BFGS", callback=callback,
-                           options={"gtol": GTOL, "maxiter": maxiter})  # fmt: skip
+            r = minimize_bounded(fun, U_start[j], sc, maxiter, accepted=accepted, stop=stop)
         except _Stopped:
             return
-        xj = np.asarray(to_x(jnp.asarray(res.x), sc))
+        xj = np.asarray(to_x(jnp.asarray(r["u"]), sc))
         with lock:
-            X[j], m2ll[j] = xj, float(res.fun)
-        done[j] = bool(res.success) or float(np.max(np.abs(res.jac))) < 10 * GTOL
-        messages[j] = "" if done[j] else str(res.message)
-        if not done[j] and res.nit < maxiter:  # stopped short (e.g. precision loss)
-            done[j] = True
-            messages[j] = f"ended: {res.message}"
+            X[j], m2ll[j] = xj, r["f"]
+        done[j] = r["converged"]
+        messages[j] = r["message"] if r["message"] not in ("", "stopped") else ""
 
     shown = _Progress(progress, names, n, "laplace", problem.name, trace)
     futures = [starts_pool.submit(run, j) for j in range(n)]
@@ -584,7 +578,7 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
         )
     shrink = {name: float(1.0 - np.std(Z[:, k], ddof=1)) if obj.n > 1 else float("nan")
               for k, (name, _) in enumerate(obj.varying)}  # fmt: skip
-    return finish(problem, obj, "laplace", "BFGS, FOCE-I", names, x0, sc, U_start, run_, final,
+    return finish(problem, obj, "laplace", "L-BFGS-B, FOCE-I", names, x0, sc, U_start, run_, final,
                   redrawn, bounds_written, t_start, rank=rank, modes=Z, shrinkage=shrink,
                   objective=obj, notes=[m for m in messages if m],
                   with_priors=None if penalty is None else float(rank[best]),

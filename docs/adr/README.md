@@ -11,3 +11,4 @@ a later record supersedes an earlier one.
 | [0003](0003-nuts-defaults.md) | `method nuts`: a mass matrix from the fast fit, chains in threads, acceptance target 0.9 | accepted |
 | [0004](0004-profile-likelihood.md) | Profiles: small-sample cut-off, scan past the walk | accepted |
 | [0005](0005-fast-laplace.md) | `method laplace`: one compile, an exact gradient, one run per inner step; the compilation cache; one XLA thread | accepted |
+| [0006](0006-bounded-optimizers.md) | Bounds kept as bounds: L-BFGS-B and trust-region least squares; a stopping rule on −2LL; ridges leave out quantities at a bound | accepted |

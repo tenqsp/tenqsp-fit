@@ -265,7 +265,7 @@ prior      ke ~ lognormal(median=0.08, sdlog=0.5)  (used: the estimates are the 
 The fit (about 40 seconds):
 
 ```text
-theoph_cov: method laplace (BFGS, FOCE-I), converged; -2LL 353.6949 (132 measurements, 12 units)
+theoph_cov: method laplace (L-BFGS-B, FOCE-I), converged; -2LL 353.6949 (132 measurements, 12 units)
 starts: 1; 1 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 40 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also
@@ -340,7 +340,7 @@ method optimize
 ```
 
 ```text
-check_t: method optimize (BFGS), converged; -2LL -30.6710 (3 measurements)
+check_t: method optimize (L-BFGS-B), converged; -2LL -30.6710 (3 measurements)
 ...
 quantity                  estimate         SE  RSE %   95 % CI                 also
 k                          0.49487   0.001316  0.266   (0.4923, 0.4975)

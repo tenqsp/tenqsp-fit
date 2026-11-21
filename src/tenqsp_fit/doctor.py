@@ -217,9 +217,19 @@ def _determination(result) -> list[Finding]:
         out.append(Finding("standard errors", "note", status + ".",
                            "if the bound is not part of the model, widen it, or fix the "
                            "quantity and say so."))  # fmt: skip
-    if H.ndim != 2 or not np.all(np.isfinite(H)):
+    if H.ndim != 2:
         return out
-    names, sc = list(result.names), result.scales
+    names, sc = list(result.names), list(result.scales)
+    # a quantity at its bound is a result (reported as such), not a measurement gap: it is held
+    # there, so its curvature says nothing, and a ridge through it would call for the opposite
+    # action (in one fit a fraction at its upper bound 1 was
+    # reported as "not determined, curvature ratio 0" where -2LL rose by 10 over its last 30 %)
+    free = [i for i, n in enumerate(names) if n not in (getattr(result, "near_bounds", {}) or {})]
+    if len(free) < len(names):
+        H = H[np.ix_(free, free)]
+        names, sc = [names[i] for i in free], [sc[i] for i in free]
+    if not free or not np.all(np.isfinite(H)):
+        return out
     w, V = np.linalg.eigh(0.5 * (H + H.T))
     top = float(np.max(w))
     if top <= 0:
@@ -279,6 +289,7 @@ def _determination(result) -> list[Finding]:
     C = np.asarray(getattr(result, "cov_u", np.nan), float)
     if status != "ok" or C.ndim != 2 or not np.all(np.isfinite(C)):
         return out
+    names, sc = list(result.names), list(result.scales)
     se_u = np.sqrt(np.diag(C))
     R = C / np.outer(se_u, se_u)
     table = result.table()
@@ -617,6 +628,10 @@ def _tolerance(result) -> list[Finding]:
         v1, Z1, g1, _ = obj.evaluate(u, result.modes)
         v2, _, g2, _ = obj.evaluate(u, Z1, tol=tight)
         dg = g2 - g1
+    elif getattr(result, "value_and_gradient", None) is not None:  # the fit's own function
+        vg = result.value_and_gradient
+        (v1, g1), (v2, g2) = vg(np.asarray(u)), vg(np.asarray(u), tight)
+        dg = g2 - g1
     else:
         v1, v2 = float(obj._jit(x)), float(obj._jit(x, tight))
         grad = jax.jit(cond._tolerant(jax.grad(lambda w: obj._minus2ll(to_x(w, sc)))))
@@ -666,18 +681,26 @@ def _gradients(result) -> list[Finding]:
         L = 0.1 * np.eye(len(u0))
     rng = np.random.default_rng(int(result.problem._options.get("seed", 0)))
 
-    f1 = lambda w: obj._minus2ll(to_x(w, sc))  # noqa: E731
-    # the fit's own compiled -2LL, at either tolerance: no new compile
-    f1_jit = lambda w: obj._jit(to_x(w, sc))  # noqa: E731
-    f2 = lambda w: obj._jit(to_x(w, sc), tight)  # noqa: E731
+    vg = getattr(result, "value_and_gradient", None)
+    if vg is not None:  # the fit's one compiled function, at either tolerance (with the
+        # written priors' terms, which are exact: they change neither side of the comparison)
+        f1_jit = lambda w: vg(np.asarray(w))[0]  # noqa: E731
+        f2 = lambda w: vg(np.asarray(w), tight)[0]  # noqa: E731
+        slope = lambda w, d: float(vg(np.asarray(w))[1] @ d)  # noqa: E731
+    else:
+        f1 = lambda w: obj._minus2ll(to_x(w, sc))  # noqa: E731
+        # the fit's own compiled -2LL, at either tolerance: no new compile
+        f1_jit = lambda w: obj._jit(to_x(w, sc))  # noqa: E731
+        f2 = lambda w: obj._jit(to_x(w, sc), tight)  # noqa: E731
+        slope = lambda w, d: float(jax.jvp(f1, (w,), (jnp.asarray(d),))[1])  # noqa: E731
     rel = []
     for u in _plausible(f1_jit, u0, L, float(f1_jit(jnp.asarray(u0))), rng):
         d = rng.normal(size=len(u0))
         d /= np.linalg.norm(d)
-        _, exact = jax.jvp(f1, (u,), (jnp.asarray(d),))
+        exact = slope(u, d)
         h = GRAD_STEP
         fd = (float(f2(u + h * d)) - float(f2(u - h * d))) / (2 * h)
-        rel.append(abs(fd - float(exact)) / max(abs(fd), abs(float(exact)), 1e-2))
+        rel.append(abs(fd - exact) / max(abs(fd), abs(exact), 1e-2))
     return [_gradient_finding(rel, rtol2, result.problem)]
 
 

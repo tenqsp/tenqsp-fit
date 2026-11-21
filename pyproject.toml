@@ -20,15 +20,14 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 dependencies = [
-    "tenqsp>=0.8.2",
+    "tenqsp[native]>=0.8.2",  # 0.9 at release: the native solver and call-time options
     "jax>=0.4.30",
     "numpy>=1.26",
     "numpyro>=0.15",
-    "optimistix>=0.0.9",
     "blackjax>=1.2",
     "arviz>=1.0",
     "pandas>=2.0",
-    "scipy>=1.11",
+    "scipy>=1.16",
 ]
 
 [project.urls]

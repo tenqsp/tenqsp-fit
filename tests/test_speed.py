@@ -23,7 +23,9 @@ def test_laplace_fit_and_checks_compile_the_objective_once(tmp_path):
     r.objective.modes(r.x)
     float(r.objective(r.x))
     assert r.objective._compiled._cache_size() == 1
-    assert r.objective._quadratic  # the exact gradient through the quadratic predictions
+    # the exact gradient through the quadratic predictions needs second derivatives of the
+    # solve: the JAX backend's; the native one gives first derivatives (differences then)
+    assert r.objective._quadratic == (r.objective._cond.backend == "jax")
 
 
 @pytest.mark.parametrize("value, stored", [("on", "on"), ("off", "off"), (True, "on"),

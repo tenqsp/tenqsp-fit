@@ -31,26 +31,29 @@ posterior mode.
 
 | The error model | Optimizer | Why |
 |---|---|---|
-| additive with a known sd (`additive(fix(0.02))`) | Levenberg–Marquardt | −2LL is a sum of squares up to a constant; Levenberg–Marquardt uses the Jacobian of the residuals and converges in few steps |
-| estimated, or an sd that changes with the prediction (`proportional(fix(0.1))`, combined, power) | BFGS | the \(\log s_j^2\) terms change with the parameters, so −2LL is not a sum of squares (and where they are estimated, Levenberg–Marquardt converges slowly) |
+| additive with a known sd (`additive(fix(0.02))`) | trust-region least squares | −2LL is a sum of squares up to a constant; the method uses the Jacobian of the residuals and converges in few steps |
+| estimated, or an sd that changes with the prediction (`proportional(fix(0.1))`, combined, power) | L-BFGS-B | the \(\log s_j^2\) terms change with the parameters, so −2LL is not a sum of squares (and where they are estimated, least squares converges slowly) |
 
-Both are [Optimistix](https://docs.kidger.site/optimistix/)'s, with relative and absolute
-tolerances 10⁻⁸ on the parameters and on −2LL, and with TenQSP's exact derivatives of the
-model's outputs (the Jacobian of the residuals, or the gradient of −2LL). The result's first
-line says which was used.
+Both are [SciPy](https://scipy.org)'s (`least_squares` with `method="trf"`, and `minimize`
+with `method="L-BFGS-B"`), with TenQSP's exact derivatives of the model's outputs (the
+Jacobian of the residuals, or the gradient of −2LL). Both keep bounds as bounds. The result's
+first line says which was used.
 
-**Step length.** One step moves no quantity by more than a factor 100 (a change of
-\(\ln 100\) on its log or logit scale; quantities estimated as they are have no cap). The
-direction of the step is kept. Without a cap, a nearly flat direction (a rate the data hardly
-determine) can make the optimizer propose values hundreds of powers of ten away, where the
-model does not run; such steps are refused and halved again and again. Profiles use the same
-cap.
+**When a start ends.** At the optimizer's own tests (L-BFGS-B: the projected gradient of −2LL
+below 10⁻³; least squares: changes below 10⁻⁸), or when its last 5 steps lowered −2LL by less
+than 10⁻⁴ in all. The second test matters for stiff models: at the default solver tolerance
+−2LL carries an integration error that can be of order 1, and a tolerance far below what
+−2LL can resolve would keep a fit going without changing it. The error is a bias that changes little between nearby values,
+so comparisons of fits are much more accurate than −2LL itself; `rtol` sets it (the doctor's
+tolerance check reports how much a tighter one changes −2LL).
 
-**Estimation scales.** Each quantity is estimated on a scale where any value is allowed:
-between bounds `in (lo, hi)` on the logit scale, above a single bound `in (lo, inf)` as
-\(lo + e^u\), below one `in (-inf, hi)` as \(hi - e^u\), else
-on the log scale when its start is above 0, else as it is. A positive start therefore keeps
-the quantity positive. `problem.summary()` lists each quantity's scale.
+**Estimation scales.** A quantity with bounds `in (lo, hi)` (or one bound) is estimated on the
+log scale when `lo` is 0 or above, else as it is, and the optimizer keeps it within its bounds:
+an estimate can lie on a bound and leave it again. A quantity without bounds is estimated on
+the log scale when its start is above 0, else as it is. `problem.summary()` lists each
+quantity's scale. (Scales that map the bounds away, such as the logit, were used before
+version 0.3: there a quantity pushed near a bound has a derivative near 0 and cannot come
+back, and fits ended on a bound that was not the optimum.)
 
 ## Starts
 
@@ -60,10 +63,11 @@ around them, with `seed`, on the estimation scales:
 | Scale | Spread of the drawn starts |
 |---|---|
 | log | within a factor of about 5 either way (95 %) |
-| logit (bounded) | 1 on the logit scale |
+| as is, between two bounds | a quarter of the range |
 | as is | half the value, at least 0.5 |
 
-A start at which the model does not run is drawn again. The starts run in parallel, one per
+Drawn starts are kept within the bounds. A start at which the model does not run, or where
+its derivatives are not finite, is drawn again. The starts run in parallel, one per
 core. The best fit (lowest −2LL) is reported; `result.starts` has every start's values, final
 −2LL, steps and status, and `result.plot_waterfall()` draws the final −2LL of each. When the
 starts end at different fits the doctor warns: see
@@ -100,7 +104,7 @@ options starts=3
 ```
 
 ```text
-decay: method optimize (Levenberg-Marquardt), converged; -2LL -34.8751 (6 measurements)
+decay: method optimize (trust-region least squares), converged; -2LL -34.8751 (6 measurements)
 starts: 3; 3 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 8 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also
@@ -113,10 +117,10 @@ note     tolerance check: at rtol 1e-08 the -2LL changes by 3.1e-05 and the esti
 note     gradient check: exact gradients agree with differences (at rtol 1e-08) to 0.017 % (3 directions).
 ```
 
-With the residual SD estimated (`error amount ~ additive(0.1)`) the optimizer is BFGS:
+With the residual SD estimated (`error amount ~ additive(0.1)`) the optimizer is L-BFGS-B:
 
 ```text
-decay: method optimize (BFGS), converged; -2LL -40.4212 (6 measurements)
+decay: method optimize (L-BFGS-B), converged; -2LL -40.4212 (6 measurements)
 starts: 3; 3 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 7 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also
@@ -167,5 +171,10 @@ Estimates, standard errors, RSE %, 95 % intervals, the doctor's findings
 - Bates DM, Watts DG. *Nonlinear Regression Analysis and Its Applications.* Wiley, 1988.
 - Beal SL. Ways to fit a PK model with some data below the quantification limit.
   *J Pharmacokinet Pharmacodyn* 2001;28:481–504 (the M3 method).
-- Nocedal J, Wright SJ. *Numerical Optimization*, 2nd ed. Springer, 2006 (BFGS,
-  Levenberg–Marquardt).
+- Nocedal J, Wright SJ. *Numerical Optimization*, 2nd ed. Springer, 2006 (quasi-Newton
+  methods, trust regions).
+- Byrd RH, Lu P, Nocedal J, Zhu C. A limited memory algorithm for bound constrained
+  optimization. *SIAM J Sci Comput* 1995;16:1190–1208 (L-BFGS-B).
+- Branch MA, Coleman TF, Li Y. A subspace, interior, and conjugate gradient method for
+  large-scale bound-constrained minimization problems. *SIAM J Sci Comput* 1999;21:1–23
+  (trust-region reflective).
