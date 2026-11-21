@@ -363,8 +363,20 @@ def covariance(value, u, sc, *, gradient=None, held=(), names=None) -> dict:
     du = np.asarray(jax.jacfwd(lambda w: to_x(w, sc))(jnp.asarray(u)))
     D = np.diag(du)
     se = np.abs(D) * se_u
-    lo = np.asarray(to_x(jnp.asarray(u - 1.96 * se_u), sc))
-    hi = np.asarray(to_x(jnp.asarray(u + 1.96 * se_u), sc))
+    # the 95 % intervals on the statistical scales (the logit within bounds): they stay
+    # within the bounds, as before the fits kept bounds as bounds (on the log scale a bounded
+    # quantity's interval could cross its bound)
+    sc_s = statistical(sc)
+    x = np.asarray(to_x(jnp.asarray(u), sc))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        try:
+            u_s = to_u(x, sc_s)
+            ds = np.diag(np.asarray(jax.jacfwd(lambda w: to_x(w, sc_s))(jnp.asarray(u_s))))
+            se_s = np.abs(D / ds) * se_u
+        except (ValueError, ZeroDivisionError, OverflowError):  # pragma: no cover - on a bound
+            u_s, sc_s, se_s = np.asarray(u), sc, se_u
+        lo = np.asarray(to_x(jnp.asarray(u_s - 1.96 * se_s), sc_s))
+        hi = np.asarray(to_x(jnp.asarray(u_s + 1.96 * se_s), sc_s))
     cov_x = (D[:, None] * cov_u) * D[None, :]
     return dict(
         se=se,

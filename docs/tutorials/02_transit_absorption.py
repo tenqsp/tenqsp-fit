@@ -122,7 +122,7 @@ print(r_sparse)
 #
 # A profile of ka shows what that means. Each point holds ka at one value and refits the
 # rest; the 95 % interval is where −2LL stays within the cut-off of its minimum. Here ka can
-# be anywhere from about 0.6 to the upper bound: the upper end is not reached.
+# be anywhere from about 0.9 to the upper bound: the upper end is not reached.
 
 # %%
 prof = r_sparse.profile("ka")
@@ -133,8 +133,8 @@ prof.plot()
 # What stays fixed along the profile is what the data determine. MTT + 1/ka is the mean
 # time from the dose until the drug reaches the circulation (the mean absorption time,
 # MAT): the mean time in transit plus the mean time in `Aa`. Within the profile's interval,
-# ka goes from 0.66 to the bound while MAT moves only from 2.1 to 1.87 h, and above the
-# estimate not at all; it is close to the true 1.5 + 1/3 = 1.83 h.
+# ka goes from about 0.9 to the bound, a factor of a hundred, while MAT stays at 1.87 h (it
+# moves by less than 0.01 h); it is close to the true 1.5 + 1/3 = 1.83 h.
 
 # %%
 d = prof.table.copy()
@@ -162,9 +162,8 @@ print(prof_rich)
 prof_rich.plot()
 
 # %% [markdown]
-# Both MTT and ka are now estimated, and the doctor no longer finds them weakly determined.
-# (Its other warning, several optima, is one of the four starts stopping at a much worse
-# fit, −2LL 135 higher; three reached the best.)
+# Both MTT and ka are now estimated, and the doctor no longer finds them weakly determined;
+# all four starts reached the same fit.
 #
 # There are two intervals for ka. The one in the table comes from the standard error: it
 # assumes that −2LL is a parabola around the estimate (on the log scale of ka). The profile

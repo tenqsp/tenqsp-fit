@@ -601,3 +601,13 @@ def test_a_profile_stays_within_the_bounds(tmp_path):
                        options="starts=1 checks=quick"))  # fmt: skip
     prof = r.profile("ka")
     assert (prof.table["value"] >= 1.2 - 1e-12).all() and (prof.table["value"] <= 50).all()
+
+
+def test_intervals_stay_within_the_bounds(tmp_path):
+    """The 95 % intervals from the standard errors are built on the logit scale within
+    bounds (the fits work on the log scale there), so they never cross a bound: ka = 1.511,
+    its lower bound 1.45, its interval on the log scale from 1.40."""
+    r = tf.fit(problem(tmp_path, estimate="ka = 1.5 in (1.45, 50), CL = 0.05, ke = 0.1",
+                       error="additive(3)", options="starts=1 checks=quick"))  # fmt: skip
+    lo, hi = r.table().set_index("quantity").loc["ka", ["CI 2.5 %", "CI 97.5 %"]]
+    assert 1.45 <= lo < r.estimates["ka"] < hi <= 50
