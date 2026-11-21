@@ -81,36 +81,35 @@ def _optimize(result, j):
 def _laplace(result, j):
     from scipy.optimize import minimize
 
-    from .laplace import GTOL
+    from .laplace import GTOL, _Warm
 
     lap, sc, problem = result.objective, result.scales, result.problem
     maxiter = int(problem._options.get("maxiter") or DEFAULT_MAXITER)
     penalty = written_penalty(problem, result.names, np.asarray(result.x0, float), sc)
     pen = (lambda u: 0.0) if penalty is None else jax.jit(lambda u: penalty(to_x(u, sc)))
     pen_grad = (lambda u: 0.0) if penalty is None else jax.jit(jax.grad(pen))
-    grad_ll = jax.jit(lambda u, Z: lap._gradient(u, Z, lambda w: to_x(w, sc)))
 
     def fit(h, start, warm=None):
-        Z = {"Z": np.asarray(result.modes if warm is None else warm)}
+        Z = _Warm(result.modes if warm is None else warm)
 
         def fun(v):
-            u = jnp.asarray(np.insert(v, j, h))
-            f, Zh = lap._jit_value(to_x(u, sc), jnp.asarray(Z["Z"]))
-            f = float(f) + float(pen(u))
-            if not np.isfinite(f):
+            u = np.insert(v, j, h)
+            f, Zh, g, dz = lap.evaluate(u, Z.start(u))
+            f = f + float(pen(jnp.asarray(u)))
+            g = np.delete(g + np.asarray(pen_grad(jnp.asarray(u))), j)
+            if not np.isfinite(f) or not np.all(np.isfinite(g)):
                 return BAD_VALUE, np.zeros(v.size)
-            g = np.delete(np.asarray(grad_ll(u, Zh)) + np.asarray(pen_grad(u)), j)
-            if not np.all(np.isfinite(g)):
-                return BAD_VALUE, np.zeros(v.size)
-            Z["Z"] = np.asarray(Zh)
+            Z.seen(u, Zh, dz)
             return f, g
 
         res = minimize(fun, np.delete(start, j), jac=True, method="BFGS",
+                       callback=lambda intermediate_result: Z.accept(
+                           np.insert(intermediate_result.x, j, h)),
                        options={"gtol": GTOL, "maxiter": maxiter})  # fmt: skip
         u = np.insert(res.x, j, h)
         m2ll = float(lap(to_x(jnp.asarray(u), sc))) + float(pen(jnp.asarray(u)))
         done = bool(res.success) or float(np.max(np.abs(res.jac))) < 10 * GTOL
         status = "converged" if done else ("max iterations" if res.nit >= maxiter else "ended")
-        return u, (m2ll if np.isfinite(m2ll) else np.nan), status, Z["Z"]
+        return u, (m2ll if np.isfinite(m2ll) else np.nan), status, Z.Z
 
     return fit

@@ -42,8 +42,7 @@ print(result)          # estimates, standard errors, and what the doctor found
   (FOCE-I). `nuts` samples the posterior with the No-U-Turn Sampler.
 - **The model is any TenQSP model**: compartments, or structured populations over age, size
   or depth, with doses, events and categories. TenQSP gives exact derivatives of every
-  output: `optimize` and `nuts` use exact gradients, and `laplace` builds its gradient from
-  them by central differences.
+  output: `optimize`, `laplace` and `nuts` use exact gradients.
 - **A diagnosis with every fit.** The doctor reports quantities the data cannot tell apart
   (ridges), quantities that are only weakly determined, several optima, estimates at a
   bound, shrinkage, and whether the solver's tolerance was tight enough. The passport writes

@@ -11,11 +11,27 @@ versioning; `0.x` releases may change the API.
   parameter set from a data column (`D = DOSE`); `doses` lines and dose rows are refused,
   with that way out in the message. The summary and `doctor()` say that no solver runs.
 
+- **`options cache`** (`on` by default): JAX's compilation cache on disk, in
+  `~/.cache/tenqsp-fit/jax` or the directory `TENQSP_FIT_CACHE` names, so a problem fitted
+  again compiles nothing (a Friberg myelosuppression fit: ~23 s of compiling becomes ~2 s).
+  `cache=off`, or `TENQSP_FIT_CACHE` set to empty, turns it off.
+
 ### Changed
+- **`method laplace` is faster** (ADR 0005): the objective is compiled once for the fit, the
+  standard errors, the modes and the doctor (it was compiled four times); the inner fit takes
+  one run of the units per step (Fisher scoring) and starts from the modes predicted at the
+  new point; the gradient is exact (second derivatives from the solver, forward over
+  forward) instead of central differences. Estimates can change in the last digits.
+- **One XLA thread**: on import, tenqsp-fit sets `XLA_FLAGS` to one thread unless it is
+  already set (to anything) or JAX has started: the many small operations of a fit run
+  faster that way. Set `XLA_FLAGS` yourself to choose otherwise.
 - **Needs TenQSP 0.8.2 or later** (models given by formulas came in 0.8.1; 0.8.2 fixes
   derivatives that 0.8.1 resolved too coarsely, which could make standard errors fail).
 
 ### Fixed
+- The doctor's tolerance check after `method laplace` compiled the gradient again (some 20 s
+  on a Friberg myelosuppression problem), although the tolerances are an input of the compiled
+  function so that it can be rerun at tighter ones.
 - A fit whose estimates have two or more directions in which -2LL does not change (or
   hardly) stopped with "The truth value of an array with more than one element is
   ambiguous" when the doctor grouped them, instead of reporting them.

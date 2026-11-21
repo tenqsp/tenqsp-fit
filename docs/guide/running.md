@@ -79,6 +79,7 @@ or in Python, `problem.options(starts=4, seed=1, rtol=1e-8)`. Every option and i
 | `progress` | `plot` in a notebook, `text` elsewhere | see above |
 | `checks` | `full` | `quick` leaves out the doctor's tolerance and gradient checks |
 | `timeout` | off | a time limit, as above |
+| `cache` | `on` | keep the compiled model on disk, so the same problem fitted again does not compile (below) |
 
 `method nuts` has its own options on the method line: `method nuts chains=4 warmup=1000
 samples=1000 target_accept=0.9` (those are the defaults; see [NUTS](../methods/nuts.md)).
@@ -86,7 +87,7 @@ samples=1000 target_accept=0.9` (those are the defaults; see [NUTS](../methods/n
 `problem.summary()` lists the options, written or default:
 
 ```text
-options    rtol 1e-6 (default), starts 8, seed 3, maxiter 200 (default), checks full (default)
+options    rtol 1e-6 (default), starts 8, seed 3, maxiter 200 (default), checks full (default), cache on (default)
 ```
 
 An option that does not exist is an error, with the nearest name:
@@ -95,7 +96,7 @@ An option that does not exist is an error, with the nearest name:
 FitTextError The fit text has 1 problem:
 
 line 14: options start=4
-options: unknown option 'start'. Did you mean 'starts'? Options: rtol, atol, starts, seed, maxiter, progress, checks, timeout.
+options: unknown option 'start'. Did you mean 'starts'? Options: rtol, atol, starts, seed, maxiter, progress, checks, timeout, cache.
 ```
 
 ### Starts
@@ -134,6 +135,23 @@ A run that fails for any other reason (the solver cannot proceed) is treated the
 there is no fallback to another solver inside a fit. The one-off runs of the model the passport
 makes (TenQSP's `diagnostics()` at the estimates) use TenQSP's SciPy backend, which retries a
 segment where BDF fails with Radau.
+
+## Compiling, the cache and threads
+
+A fit compiles the model and its likelihood once (in the table below, "until the first
+step"). The compiled code is kept on disk, in `~/.cache/tenqsp-fit/jax`, so the same problem
+fitted again, in a new session or with other data of the same shape, starts at once (a fit
+of Friberg's myelosuppression model to 20 patients: about 23 s of compiling becomes about
+2 s). `options cache=off` turns this off for the fits that follow; `TENQSP_FIT_CACHE` (an
+environment variable) names another directory, or, set to empty, turns it off. The directory
+is readable by its owner only: JAX runs the code it finds there, so do not share it.
+
+On import, tenqsp-fit sets JAX to compute each operation on one thread
+(`XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"`): a fit is
+many small operations, which run faster that way, and several starts still run side by side
+on separate cores. It leaves `XLA_FLAGS` alone when you have set it (to anything, also
+empty), and cannot change it once JAX has started (import tenqsp-fit before running anything
+in JAX). The setting holds for the whole Python session.
 
 ## How long it takes
 

@@ -82,7 +82,7 @@ fixed      none
 from model none
 formulas   none
 method     laplace (population, FOCE-I)
-options    rtol 1e-6 (default), starts 1 (default), seed 0 (default), maxiter 200 (default), checks full (default)
+options    rtol 1e-6 (default), starts 1 (default), seed 0 (default), maxiter 200 (default), checks full (default), cache on (default)
 ```
 
 Every link, dose route, estimated quantity, scale and default is listed. Nothing is fitted

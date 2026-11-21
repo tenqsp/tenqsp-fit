@@ -613,15 +613,10 @@ def _tolerance(result) -> list[Finding]:
     sc = result.scales
     x = jnp.asarray(result.x)
     u = jnp.asarray(to_u(np.asarray(result.x), sc))
-    if isinstance(obj, Laplace):
-        zeros = jnp.zeros((obj.n, obj.q))
-        v1 = float(obj._jit_value(x, zeros)[0])
-        v2, Z2 = obj._jit_value(x, zeros, tight)
-        v2 = float(v2)
-        grad = jax.jit(cond._tolerant(lambda w, Zk: obj._gradient(w, Zk, lambda v: to_x(v, sc))))
-        dg = np.asarray(grad(u, Z2, tol=tight)) - np.asarray(
-            grad(u, jnp.asarray(result.modes), tol=cond._tol0)
-        )
+    if isinstance(obj, Laplace):  # its one compiled function, at the tighter tolerances
+        v1, Z1, g1, _ = obj.evaluate(u, result.modes)
+        v2, _, g2, _ = obj.evaluate(u, Z1, tol=tight)
+        dg = g2 - g1
     else:
         v1, v2 = float(obj._jit(x)), float(obj._jit(x, tight))
         grad = jax.jit(cond._tolerant(jax.grad(lambda w: obj._minus2ll(to_x(w, sc)))))

@@ -42,6 +42,7 @@ import tenqsp as tq
 from jax.scipy.stats import norm
 
 from . import entries as E
+from ._jax_setup import use_cache
 from .distributions import Fixed, quantile
 from .errors import ProblemError
 
@@ -98,6 +99,7 @@ class Objective:
         from .problem import _Estimate, _Fix, _key
 
         problem.check()
+        use_cache(problem._options.get("cache", "on"))
         varying = problem._varying()
         if varying and not _population:
             raise TypeError(  # pragma: no cover (tf.objective gives the Laplace objective)
