@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 dependencies = [
-    "tenqsp[native]>=0.8.2",  # 0.9 at release: the native solver and call-time options
+    "tenqsp[native]>=0.9",
     "jax>=0.4.30",
     "numpy>=1.26",
     "numpyro>=0.15",
