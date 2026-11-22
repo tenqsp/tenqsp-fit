@@ -27,7 +27,8 @@ Needs TenQSP 0.9.1.
   events or conditions on time), else on JAX; estimates agree with the JAX solver to
   round-off. A population fit of Friberg's model to 20 patients: 44 s with JAX, 9 s native.
   The first fit of a model compiles its solver once (cached on disk). `backend=jax` or
-  `backend=native` chooses. Needs TenQSP 0.9.1 (0.9 brings it; 0.9.1 fixes a ZeroDivisionError in it); numba is now a dependency.
+  `backend=native` chooses. Needs TenQSP 0.9.1 (0.9 brings the native solver, 0.9.1 fixes
+  a ZeroDivisionError in it); numba is now a dependency.
 - **The setup compiles less**: the fit's one compiled function (value, gradient and the
   run's steps, with the tolerances and the step limit as inputs) also serves the standard
   errors and the doctor's checks, and the step limit is set from the fit's first run instead
@@ -59,8 +60,6 @@ Needs TenQSP 0.9.1.
 - **One XLA thread**: on import, tenqsp-fit sets `XLA_FLAGS` to one thread unless it is
   already set (to anything) or JAX has started: the many small operations of a fit run
   faster that way. Set `XLA_FLAGS` yourself to choose otherwise.
-- **Needs TenQSP 0.8.2 or later** (models given by formulas came in 0.8.1; 0.8.2 fixes
-  derivatives that 0.8.1 resolved too coarsely, which could make standard errors fail).
 
 ### Fixed
 - The doctor's tolerance check after `method laplace` compiled the gradient again (some 20 s
