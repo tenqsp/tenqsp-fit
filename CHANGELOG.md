@@ -22,7 +22,7 @@ versioning; `0.x` releases may change the API.
   events or conditions on time), else on JAX; estimates agree with the JAX solver to
   round-off. A population fit of Friberg's model to 20 patients: 44 s with JAX, 9 s native.
   The first fit of a model compiles its solver once (cached on disk). `backend=jax` or
-  `backend=native` chooses. Needs TenQSP 0.9 (which brings it); numba is now a dependency.
+  `backend=native` chooses. Needs TenQSP 0.9.1 (0.9 brings it; 0.9.1 fixes a ZeroDivisionError in it); numba is now a dependency.
 - **The setup compiles less**: the fit's one compiled function (value, gradient and the
   run's steps, with the tolerances and the step limit as inputs) also serves the standard
   errors and the doctor's checks, and the step limit is set from the fit's first run instead
