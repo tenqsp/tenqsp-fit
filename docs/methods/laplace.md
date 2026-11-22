@@ -57,19 +57,28 @@ prediction (proportional, combined, power) "with interaction".
 
 ## The fit
 
-**Inner fit.** The conditional modes of all units at once, by Newton steps (from differences
-of the exact gradient by the scores), with a Fisher-scoring step when Newton's would not go
-downhill, and step halving. Each evaluation starts from the modes found last.
+**Inner fit.** The conditional modes of all units at once, by Fisher scoring (the step
+\(-H^{-1}\nabla g\), always downhill) with step halving: each step is one run of the units,
+which gives the value at the trial point, its gradient by the scores and \(H\) together.
+Each evaluation starts from the modes predicted at the new point from the last ones (how the
+modes move with the parameters, below), so near the estimates one or two steps suffice.
 
 **Outer fit.** BFGS ([SciPy](https://scipy.org)) on the estimation scales of
 [`optimize`](optimize.md) (log, logit within bounds; a correlation within (−1, 1)), as NONMEM
 minimizes its FOCE objective. Its gradient includes how the modes move with the parameters
-(the implicit function theorem), so the fit reaches the minimum of the Laplace −2LL. The
-terms of this gradient are central differences (step 10⁻⁴ on the estimation scale) of the
-objective and of its exact derivative by the scores, at fixed modes: not exact, but close
-enough for the fit to reach the minimum (theophylline: −2LL 353.98, against 354.04 with the
-first-order "FOCE gradient", which holds the solver's sensitivities fixed). The fit
-ends when the largest derivative of −2LL on the estimation scale is below 10⁻³.
+(the implicit function theorem), so the fit reaches the minimum of the Laplace −2LL
+(theophylline: −2LL 353.98, against 354.04 with the first-order "FOCE gradient", which holds
+the solver's sensitivities fixed). The gradient is exact: one run gives each unit's
+predictions with their first and second derivatives by its model parameters (TenQSP's
+sensitivities, differentiated once more), and every term of the gradient is an automatic
+derivative of the quadratic they make. Where TenQSP gives no second derivatives (a model with
+events, or on its sparse tier for large models), or the model has many parameters set by the
+fit, the terms are central differences (step 10⁻⁴ on the estimation scale) of the objective
+and of its exact derivative by the scores, at fixed modes. The fit ends when the largest
+derivative of −2LL on the estimation scale is below 10⁻³.
+
+The value, the modes and the gradient come from one compiled function, used by the fit, the
+standard errors, the doctor's checks and the profiles: the model is compiled once.
 
 **Starts** as in [`optimize`](optimize.md): `options starts=4` draws three more around the
 values written, with `seed`, and runs them in parallel.
@@ -77,7 +86,7 @@ values written, with `seed`, and runs them in parallel.
 ## Standard errors and shrinkage
 
 **Standard errors** from the Hessian of −2LL at the estimates, by central differences of the
-gradient: covariance \(= 2H^{-1}\) on the estimation scale (NONMEM's R matrix), carried to the
+gradient (each from the modes predicted at its point): covariance \(= 2H^{-1}\) on the estimation scale (NONMEM's R matrix), carried to the
 reported scale. The 95 % intervals are carried over from the estimation scale, so a positive
 quantity's interval stays positive.
 
@@ -102,7 +111,7 @@ method laplace
 ```
 
 ```text
-theoph_pop: method laplace (BFGS, FOCE-I), converged; -2LL 353.9837 (132 measurements, 12 units)
+theoph_pop: method laplace (L-BFGS-B, FOCE-I), converged; -2LL 353.9837 (132 measurements, 12 units)
 starts: 1; 1 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 40 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also

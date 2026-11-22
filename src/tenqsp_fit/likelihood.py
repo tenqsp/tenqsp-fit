@@ -42,10 +42,25 @@ import tenqsp as tq
 from jax.scipy.stats import norm
 
 from . import entries as E
+from ._jax_setup import use_cache
 from .distributions import Fixed, quantile
 from .errors import ProblemError
 
 __all__ = ["Objective", "objective"]
+
+
+def _batch_function(sim, scenarios, wrt, backend):
+    """The units' batched simulation (``check=False``: the fit's own compiled functions run
+    it first) and the backend it uses: TenQSP's native CPU solver (ADR 0011 of TenQSP) where
+    the model allows it and numba is installed, for ``auto``; JAX otherwise."""
+    if backend in ("auto", "native"):
+        try:
+            return sim.function(scenarios, wrt=wrt, check=False, backend="native"), "native"
+        except (ValueError, TypeError, NotImplementedError) as e:
+            if backend == "native":
+                raise ValueError(f"options backend=native: {e}") from None
+    return sim.function(scenarios, wrt=wrt, check=False), "jax"
+
 
 ATOL = 1e-6  # TenQSP's default absolute tolerance
 # a limit on each solve's steps between two doses or events (TenQSP's max_steps): this many
@@ -98,6 +113,7 @@ class Objective:
         from .problem import _Estimate, _Fix, _key
 
         problem.check()
+        use_cache(problem._options.get("cache", "on"))
         varying = problem._varying()
         if varying and not _population:
             raise TypeError(  # pragma: no cover (tf.objective gives the Laplace objective)
@@ -221,21 +237,20 @@ class Objective:
         # function at tighter ones without a new compile): the problem's, and ``_tol`` those
         # of the call being traced (``_tolerant``)
         self._tol0 = {k: jnp.asarray(v, dtype=jnp.float64) for k, v in sim_opts.items()}
+        # the step limit is an input too: STEP_MAX until a run at the starts has been counted
+        # (``limit_steps``, from the fit's first evaluation: no run or compile of its own)
+        self.max_steps = STEP_MAX
+        self._tol0["max_steps"] = jnp.asarray(STEP_MAX, dtype=jnp.int64)
         self._tol = None
+        self._steps = None  # the steps of the run being traced (``_run``)
         self._wrt_arg = list(wrt) or [next(iter(m.params))]
-        self._fs = sim.function(scenarios, wrt=self._wrt_arg)
+        # check=False: the fit's own compiled functions run the units (a check at build time
+        # would compile the batch a second time); a start that does not run is drawn again
+        self._fs, self.backend = _batch_function(
+            sim, scenarios, self._wrt_arg, opts.get("backend", "auto")
+        )
         if not wrt:  # nothing reaches the model: still one function, at its own values
             self._model_params = lambda x, Z=None, covariates=None: jnp.asarray(self._fs.x0)
-        # a trial point far out of range (an optimizer's k = 1e133) can need millions of
-        # steps: limit each solve to STEP_FACTOR times the work at the starts, so such a run
-        # fails (NaN, a rejected point) in seconds instead of running for hours
-        most = max(self._fs.steps(self._model_params(jnp.asarray(self.x0, dtype=jnp.float64))))
-        self.max_steps = min(STEP_MAX, max(STEP_FLOOR, STEP_FACTOR * most))
-        if self.max_steps < STEP_MAX:
-            sim = problem.model.simulator(
-                outputs=list(outputs), max_steps=self.max_steps, **sim_opts
-            )
-            self._sim, self._fs = sim, sim.function(scenarios, wrt=self._wrt_arg)
 
         # ---- links: predictions at the measurements, data, censoring, error model
         errors = {_key(e.lhs): e.model for e in problem._errors}
@@ -316,8 +331,65 @@ class Objective:
     # ------------------------------------------------------------------ the function
     def _run(self, P):
         """The batched simulation at the units' model parameters ``P``, at the tolerances of
-        the call being traced (the problem's outside ``_tolerant``)."""
-        return self._fs(P, **(self._tol or {}))
+        the call being traced (the problem's outside ``_tolerant``). The run's steps are kept
+        in ``_steps`` for the function being traced to return (``steps_of``)."""
+        out, self._steps = self._fs(P, **(self._tol or {}), with_steps=True)
+        return out
+
+    def steps_of(self, fn):
+        """``fn`` returning ``(its value, the most steps any unit's run took)``, for a
+        function whose value runs the units once (as -2LL does)."""
+
+        def both(*args):
+            v = fn(*args)
+            return v, jnp.max(self._steps)
+
+        return both
+
+    def compiled_u(self, sc, *, residuals: bool = False):
+        """The one compiled function of a fit on the scales ``sc`` (built once per scales):
+        ``f(u, tol=None)`` -> ``(-2LL, its gradient, the most steps of the run)`` (or, with
+        ``residuals``, ``(the residuals, their Jacobian, steps)``), ``tol`` the tolerances
+        and step limit (the problem's by default). The fit, its final values, the standard
+        errors and the doctor's checks all call it: each separate ``jax.jit`` of the model
+        traces the solver again (seconds), even when the compiled code comes from the
+        cache."""
+        from .optimize import to_x
+
+        key = (tuple(tuple(s) for s in sc), residuals)
+        cache = self.__dict__.setdefault("_compiled_u", {})
+        if key not in cache:
+            if residuals:
+
+                def res(u):
+                    return self._residuals(to_x(u, sc))
+
+                def fn(u):
+                    r, most = self.steps_of(res)(u)
+                    return r, jax.jacfwd(res)(u), most
+            else:
+                vg = jax.value_and_grad(
+                    self.steps_of(lambda u: self._minus2ll(to_x(u, sc))), has_aux=True
+                )
+
+                def fn(u):
+                    (v, most), g = vg(u)
+                    return v, g, most
+
+            jitted = jax.jit(self._tolerant(fn))
+            cache[key] = lambda u, tol=None: jitted(
+                jnp.asarray(u, dtype=jnp.float64), tol=self._tol0 if tol is None else tol
+            )
+        return cache[key]
+
+    def limit_steps(self, most) -> None:
+        """Limit each solve to STEP_FACTOR times ``most`` steps (the most a unit took at the
+        starts), at least STEP_FLOOR and at most STEP_MAX: a trial point far out of range
+        (an optimizer's k = 1e133) can need millions of steps, and such a run then fails (NaN,
+        a rejected point) in seconds instead of running for hours. An input of every compiled
+        function: nothing is compiled again."""
+        self.max_steps = int(min(STEP_MAX, max(STEP_FLOOR, STEP_FACTOR * int(most))))
+        self._tol0["max_steps"] = jnp.asarray(self.max_steps, dtype=jnp.int64)
 
     def _tolerant(self, fn):
         """``fn`` with one more keyword input, ``tol`` ({"rtol": ..., "atol": ...} as
@@ -336,7 +408,7 @@ class Objective:
     def tighter(self, factor: float) -> dict:
         """The problem's tolerances divided by ``factor`` (atol only when the problem sets
         it), in the form ``tol`` takes."""
-        return {k: v / factor for k, v in self._tol0.items()}
+        return {k: (v / factor if k in ("rtol", "atol") else v) for k, v in self._tol0.items()}
 
     def predictions(self, x) -> dict:
         """Each link's prediction at its measurements: ``{lhs: (units, measurements)}``, on
@@ -473,6 +545,16 @@ class Objective:
             parts += [z.ravel(), m3.ravel()]
         return jnp.concatenate(parts)
 
+    def m2ll_from_residuals(self, x) -> float:
+        """With ``sum_of_squares``: -2LL minus the sum of the squared residuals, a constant of
+        the data (each measured value's ``2 log sd + log 2 pi``; a censored one's term is its
+        squared residual). No solver runs."""
+        out = 0.0
+        for lk in self._links:
+            sd = float(np.asarray(self._sd(lk, jnp.asarray(x), jnp.zeros(()))))
+            out += float(lk["n"] - lk["n_censored"]) * (2.0 * math.log(sd) + _LOG_2PI)
+        return out
+
     def _minus2ll(self, x):
         return sum(jnp.sum(t) for t in self.terms(x).values())
 
@@ -484,7 +566,9 @@ class Objective:
 
     def status(self, x) -> dict:
         """``{unit: "ok" or why its run failed}``."""
-        st = self._fs.status(self._model_params(jnp.asarray(x, dtype=jnp.float64)))
+        st = self._fs.status(
+            self._model_params(jnp.asarray(x, dtype=jnp.float64)), **self._tol0
+        )  # the fit's tolerances and step limit
         return dict(zip(self.units, st, strict=True))
 
     def unpack(self, x) -> dict[str, float]:

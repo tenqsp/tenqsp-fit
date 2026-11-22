@@ -821,10 +821,16 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
             pass
         return kept[sign]
 
+    from .optimize import box
+
+    lo_box, hi_box = box(sc)[j]  # the profile stays within the quantity's bounds
+
     def _side(sign, out):
         start, warm, u_end = u_best, None, u_hat
         for k in range(1, points + 1):
-            u_end = u_hat + sign * k * step
+            if u_end in (lo_box, hi_box):  # the bound was the last point
+                break
+            u_end = float(np.clip(u_hat + sign * k * step, lo_box, hi_box))
             u, m2ll, status, warm = fit(u_end, start, warm)
             if np.isfinite(m2ll):
                 start = u
@@ -849,8 +855,8 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
 
     def scanned(sign, u_from, start, f_from, out):
         """Adds the scan's points to ``out``."""
-        far = hi_u if sign > 0 else lo_u
-        if not np.isfinite(far) or (far - u_from) * sign <= 0:
+        far = float(np.clip(hi_u if sign > 0 else lo_u, lo_box, hi_box))
+        if not np.isfinite(far) or (far - u_from) * sign <= 1e-9:
             return
         if sc[j][0] == "logit":  # the walk ended next to a bound: nothing left to scan
             frac = lambda u: 1 / (1 + np.exp(-u))  # noqa: E731
@@ -1078,7 +1084,7 @@ def run_record(result, text: str | None = None, data_bytes: bytes | None = None)
                 "python": platform.python_version()}  # fmt: skip
     from importlib.metadata import PackageNotFoundError, version
 
-    for dist in ("scipy", "optimistix", "numpyro", "arviz-stats"):  # the optimizers, NUTS
+    for dist in ("scipy", "numpyro", "arviz-stats"):  # the optimizers, NUTS
         try:
             versions[dist.replace("-", "_")] = version(dist)
         except PackageNotFoundError:  # pragma: no cover

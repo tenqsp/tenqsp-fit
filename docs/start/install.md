@@ -53,8 +53,8 @@ TIME,DV
 ## What gets installed
 
 tenqsp-fit is built on [TenQSP](https://tenqsp.github.io/tenqsp/) (the models and their
-exact derivatives), [JAX](https://jax.readthedocs.io), [Optimistix](https://docs.kidger.site/optimistix/)
-(Levenberg–Marquardt), [SciPy](https://scipy.org) (BFGS and statistics),
+exact derivatives), [JAX](https://jax.readthedocs.io), [SciPy](https://scipy.org) (the
+optimizers, L-BFGS-B and trust-region least squares, and statistics),
 [NumPyro](https://num.pyro.ai) (the NUTS sampler), [ArviZ](https://python.arviz.org)
 (posterior summaries) and [pandas](https://pandas.pydata.org) (data and tables). Plots need
 [matplotlib](https://matplotlib.org), installed with the `plot` extra (as above, or

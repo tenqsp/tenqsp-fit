@@ -11,11 +11,56 @@ versioning; `0.x` releases may change the API.
   parameter set from a data column (`D = DOSE`); `doses` lines and dose rows are refused,
   with that way out in the message. The summary and `doctor()` say that no solver runs.
 
+- **`options cache`** (`on` by default): JAX's compilation cache on disk, in
+  `~/.cache/tenqsp-fit/jax` or the directory `TENQSP_FIT_CACHE` names, so a problem fitted
+  again compiles nothing (a Friberg myelosuppression fit: ~23 s of compiling becomes ~2 s).
+  `cache=off`, or `TENQSP_FIT_CACHE` set to empty, turns it off.
+
 ### Changed
+- **TenQSP's native solver** (`options backend=auto`, the default): the units' simulations
+  run on TenQSP's BDF compiled by numba wherever the model allows it (forward derivatives, no
+  events or conditions on time), else on JAX; estimates agree with the JAX solver to
+  round-off. A population fit of Friberg's model to 20 patients: 44 s with JAX, 9 s native.
+  The first fit of a model compiles its solver once (cached on disk). `backend=jax` or
+  `backend=native` chooses. Needs TenQSP 0.9.1 (0.9 brings it; 0.9.1 fixes a ZeroDivisionError in it); numba is now a dependency.
+- **The setup compiles less**: the fit's one compiled function (value, gradient and the
+  run's steps, with the tolerances and the step limit as inputs) also serves the standard
+  errors and the doctor's checks, and the step limit is set from the fit's first run instead
+  of a separate run and build.
+- **Profiles stay within the bounds** of the quantity profiled (walk and scan).
+- **Bounds are kept as bounds** (ADR 0006): `method optimize` uses L-BFGS-B on −2LL (or
+  trust-region least squares where −2LL is a sum of squares), and `method laplace` and
+  profiles use the same optimizer, all from SciPy, instead of Optimistix and BFGS on scales
+  that mapped bounds away (the logit). On those scales a quantity pushed near a bound could
+  not come back: fits ended on a bound, with a near-bound warning, above the optimum (in one
+  fit 4.3 above it in −2LL). **Fits can end at a lower −2LL than before, and estimates near
+  a bound change.** A bounded quantity is now estimated on the log scale when its lower bound
+  is 0 or above, else as it is; the summary says `log scale, bounded` or `as is, bounded`.
+  Default priors and NUTS keep their scales.
+- **A start ends when −2LL stops moving**: also when its last 5 steps lowered −2LL by less
+  than 1e-4 in all (before, 1e-8 on −2LL and on the parameters, which a stiff model's −2LL,
+  carrying an integration error of order 1 at the default tolerance, kept from being met:
+  one fit spent most of its time lowering −2LL by less than 1).
+- **A rejected step costs one run**, not two (the point was run again to ask whether the
+  model ran there). A start whose derivatives are not finite is drawn again.
+- **The doctor's ridges leave out quantities at a bound**: an active bound is a result, not
+  something the data fail to determine.
+- **Needs SciPy 1.16 or later; no longer needs Optimistix.**
+- **`method laplace` is faster** (ADR 0005): the objective is compiled once for the fit, the
+  standard errors, the modes and the doctor (it was compiled four times); the inner fit takes
+  one run of the units per step (Fisher scoring) and starts from the modes predicted at the
+  new point; the gradient is exact (second derivatives from the solver, forward over
+  forward) instead of central differences. Estimates can change in the last digits.
+- **One XLA thread**: on import, tenqsp-fit sets `XLA_FLAGS` to one thread unless it is
+  already set (to anything) or JAX has started: the many small operations of a fit run
+  faster that way. Set `XLA_FLAGS` yourself to choose otherwise.
 - **Needs TenQSP 0.8.2 or later** (models given by formulas came in 0.8.1; 0.8.2 fixes
   derivatives that 0.8.1 resolved too coarsely, which could make standard errors fail).
 
 ### Fixed
+- The doctor's tolerance check after `method laplace` compiled the gradient again (some 20 s
+  on a Friberg myelosuppression problem), although the tolerances are an input of the compiled
+  function so that it can be rerun at tighter ones.
 - A fit whose estimates have two or more directions in which -2LL does not change (or
   hardly) stopped with "The truth value of an array with more than one element is
   ambiguous" when the doctor grouped them, instead of reporting them.

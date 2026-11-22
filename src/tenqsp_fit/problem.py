@@ -49,7 +49,7 @@ METHOD_DEFAULTS = {"nuts": {"chains": 4, "warmup": 1000, "samples": 1000, "targe
 CONSTANTS = {"e": "exp(1)"}  # names users may expect (TenQSP knows pi, not e)
 # options with their defaults (printed in the summary; rule: no silent defaults)
 OPTIONS = {"rtol": 1e-6, "atol": None, "starts": 1, "seed": 0, "maxiter": None, "progress": None,
-           "checks": "full", "timeout": None}  # fmt: skip
+           "checks": "full", "timeout": None, "cache": "on", "backend": "auto"}  # fmt: skip
 
 
 class _Text(str):
@@ -937,7 +937,9 @@ class Problem:
         the doctor leaves out its tolerance and gradient checks), ``timeout`` (a time limit:
         seconds, or text such as "90s", "30min", "2h"; off by default. When it is reached the
         fit stops after the step each start is taking, as Ctrl-C does, and returns what it
-        has, marked "stopped"; ``timeout=None``: no limit, as when it is left out)."""
+        has, marked "stopped"; ``timeout=None``: no limit, as when it is left out),
+        ``cache`` ("on" or "off", or True/False: JAX's compilation cache on disk, so a fit
+        run again compiles nothing; see the guide, Running a fit)."""
         if "timeout" in options and options["timeout"] is None:
             options = {k: v for k, v in options.items() if k != "timeout"}
         for k, v in options.items():
@@ -957,6 +959,13 @@ class Problem:
                     raise ValueError(f"options: checks is 'full' or 'quick', got {v!r}.")
             elif k == "timeout":
                 seconds(v)  # raises when it cannot be read
+            elif k == "backend":
+                if v not in ("auto", "jax", "native"):
+                    raise ValueError(f"options: backend is 'auto', 'jax' or 'native', got {v!r}.")
+            elif k == "cache":
+                if v not in ("on", "off", True, False):
+                    raise ValueError(f"options: cache is 'on' or 'off', got {v!r}.")
+                options = {**options, k: {True: "on", False: "off"}.get(v, v)}
             elif not (isinstance(v, int) and not isinstance(v, bool) and v >= (k == "starts")):
                 raise ValueError(f"options: {k} must be a whole number, got {v!r}.")
             if k in self._options:
@@ -1842,10 +1851,10 @@ class Problem:
         est = self.estimated()
         row("estimated", f"{len(est)}: " + " ".join(est))
         if self._method.name in ("optimize", "laplace"):
-            from .optimize import scale_text, scales
+            from .optimize import fit_scales, scale_text
 
             names, x0, bounds = self._starts()
-            row("scales", scale_text(names, scales(names, x0, bounds, self._kinds(names))))
+            row("scales", scale_text(names, fit_scales(names, x0, bounds, self._kinds(names))))
             for i, line in enumerate(self._one_value_lines()):
                 row("one value" if i == 0 else "", line)
         fixed = [f"{d.name}={_num(d.value)}" for d in self._params if isinstance(d, _Fix)]

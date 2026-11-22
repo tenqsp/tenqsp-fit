@@ -109,13 +109,20 @@ def test_gradient_against_finite_differences(data_file):
         np.testing.assert_allclose(float(g[i]), fd, rtol=1e-5)
 
 
+def _most_at_starts(obj):
+    return max(obj._fs.steps(obj._model_params(jnp.asarray(obj.x0, dtype=jnp.float64))))
+
+
 def test_a_limit_on_each_solves_steps(data_file, monkeypatch):
     """A run that needs far more steps than at the starts fails (NaN, a rejected point):
     with the limit at 1 times the starts' work, a 1e4 times faster absorption (a stiff
-    start) is over it; with the default 50 times (at least 5000), it runs."""
+    start) is over it; with the default 50 times (at least 5000), it runs. The limit is set
+    from the fit's first run (``limit_steps``): an input of the compiled functions."""
     fit = "observe conc = DV\nestimate ka = 1.4, CL = 0.05, ke = 0.07\nerror conc ~ additive(0.3)"
     x_far = lambda obj: jnp.asarray(obj.x0).at[0].multiply(1e4)  # noqa: E731
     obj = tf.objective(make(data_file, fit))
+    assert obj.max_steps == 100_000  # until a run at the starts has been counted
+    obj.limit_steps(_most_at_starts(obj))
     assert 5000 <= obj.max_steps <= 100_000
     assert np.isfinite(float(obj(x_far(obj))))
     import tenqsp_fit.likelihood as L
@@ -123,6 +130,7 @@ def test_a_limit_on_each_solves_steps(data_file, monkeypatch):
     monkeypatch.setattr(L, "STEP_FACTOR", 1)
     monkeypatch.setattr(L, "STEP_FLOOR", 1)
     tight = tf.objective(make(data_file, fit))
+    tight.limit_steps(_most_at_starts(tight))
     assert tight.max_steps < 1000
     assert np.isfinite(float(tight(jnp.asarray(tight.x0))))
     assert np.isnan(float(tight(x_far(tight))))

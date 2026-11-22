@@ -7,6 +7,7 @@
 >>> print(problem.summary())
 """
 
+from . import _jax_setup  # noqa: F401 - first: XLA's threads, before JAX starts
 from .distributions import (
     Distribution,
     ErrorModel,

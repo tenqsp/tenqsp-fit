@@ -15,7 +15,7 @@ from scipy.stats import multivariate_normal, norm, weibull_min
 
 import tenqsp_fit as tf
 from tenqsp_fit.distributions import quantile
-from tenqsp_fit.optimize import scales, to_u, to_x
+from tenqsp_fit.optimize import to_u
 
 LIN = """model lin
 param A=10, B=1, k=0.3
@@ -87,6 +87,7 @@ def test_laplace_is_exact_for_a_linear_model(tmp_path):
     assert "Laplace objective" in repr(obj) and "A, B varying" in repr(obj)
 
 
+@pytest.mark.parametrize("quadratic", [True, False])
 @pytest.mark.parametrize(
     "dist, x",
     [
@@ -94,22 +95,27 @@ def test_laplace_is_exact_for_a_linear_model(tmp_path):
         ("weibull(shape=5, scale=10)", [6.0, 9.0, 0.8, 0.6, 0.28, 0.2, 0.4]),  # a shape
     ],
 )
-def test_gradient_by_the_implicit_function_theorem(tmp_path, dist, x):
-    """Against central differences of -2LL (each with its own inner fit)."""
+def test_gradient_by_the_implicit_function_theorem(tmp_path, dist, x, quadratic):
+    """Against central differences of -2LL (each with its own inner fit), through the units'
+    quadratic predictions and by differences of first derivatives."""
     est = f"estimate A ~ {dist}\nestimate B ~ normal(mean=0.5, sd=1)\nestimate k = 0.2\n"
     p = lin_problem(tmp_path, estimate=est)
     obj = tf.objective(p)
-    sc = scales(obj.names, obj.x0, obj.bounds)
-    u = to_u(np.array(x), sc)
-    Z = obj.modes(to_x(jnp.asarray(u), sc))
-    g = np.asarray(obj._gradient(jnp.asarray(u), jnp.asarray(Z), lambda w: to_x(w, sc)))
+    obj._quadratic = quadratic  # before the first call compiles it
+    u = to_u(np.array(x), obj.scales)
+    _, Z, g, dz = obj.evaluate(u)
     h, E = 1e-5, np.eye(len(u))
 
     def f(w):
-        return float(obj._jit_value(to_x(jnp.asarray(w), sc), jnp.asarray(Z))[0])
+        return obj.evaluate(w, Z, gradient=False)[0]
 
     fd = np.array([(f(u + h * E[i]) - f(u - h * E[i])) / (2 * h) for i in range(len(u))])
     np.testing.assert_allclose(g, fd, rtol=1e-4, atol=1e-5)
+    # the modes' derivative, against the modes at u +- h
+    dz_fd = np.stack([(obj.evaluate(u + h * E[i], Z, gradient=False)[1]
+                       - obj.evaluate(u - h * E[i], Z, gradient=False)[1]) / (2 * h)
+                      for i in range(len(u))], axis=2)  # fmt: skip
+    np.testing.assert_allclose(dz, dz_fd, rtol=1e-3, atol=1e-5)
 
 
 def test_fit_reaches_the_maximum_likelihood(tmp_path):
@@ -159,7 +165,7 @@ def test_fit_reaches_the_maximum_likelihood(tmp_path):
     assert len(ind) == 8 and np.allclose(ind.k, r.estimates["k"])
     assert set(r.shrinkage) == {"A", "B"}
     text = repr(r)
-    assert "method laplace (BFGS, FOCE-I), converged" in text and "8 units" in text
+    assert "method laplace (L-BFGS-B, FOCE-I), converged" in text and "8 units" in text
     assert "shrinkage (1 - SD of the units' scores): A" in text
 
 

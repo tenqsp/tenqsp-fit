@@ -137,7 +137,7 @@ def test_written_priors_give_the_posterior_mode_optimize(tmp_path):
     lp = st.lognorm(0.2, scale=0.05).logpdf(e["ke"]) + st.norm(1, 0.5).logpdf(e["ka"])
     assert r.with_priors == pytest.approx(r.m2ll - 2 * lp, abs=1e-8)
     assert "posterior mode" in repr(r)
-    assert r.optimizer == "BFGS"  # least squares cannot carry a prior
+    assert r.optimizer == "L-BFGS-B"  # least squares cannot carry a prior
 
 
 def test_written_priors_give_the_posterior_mode_laplace(tmp_path):

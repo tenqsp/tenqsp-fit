@@ -91,7 +91,7 @@ print(result)
 ```
 
 ```text
-timekill: method optimize (BFGS), converged; -2LL -34.5421 (24 measurements)
+timekill: method optimize (L-BFGS-B), converged; -2LL -34.5421 (24 measurements)
 starts: 4; 3 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 534 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also
@@ -163,7 +163,7 @@ print(bacteria)
 ```
 
 ```text
-timekill_bacteria: method optimize (BFGS), max iterations; -2LL -31.4446 (12 measurements)
+timekill_bacteria: method optimize (L-BFGS-B), max iterations; -2LL -31.4446 (12 measurements)
 starts: 1; 1 at the best fit (within 0.1); redrawn 0; failed runs during the fit 0; 214 s
 
 quantity                  estimate         SE  RSE %   95 % CI                 also

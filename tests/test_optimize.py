@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
-"""``method optimize``: multi-start Levenberg-Marquardt (additive errors of known sd) or
+"""``method optimize``: multi-start trust-region least squares (additive errors of known sd) or
 BFGS (otherwise). Oracles: oral one-compartment PK in closed form, fitted by scipy's
 least squares; for an estimated additive sd, its closed form at the minimum (sd^2 = RSS/n)."""
 
@@ -62,12 +62,12 @@ def oracle():
     return np.exp(fit.x), float(np.sum(fit.fun**2)), len(df)
 
 
-def test_least_squares_by_levenberg_marquardt(tmp_path, oracle):
+def test_least_squares_by_trust_region(tmp_path, oracle):
     x, rss, n = oracle
     p = problem(tmp_path)
     assert "scales     log scale: ka CL ke" in p.summary()
     r = tf.fit(p)
-    assert isinstance(r, tf.Result) and r.optimizer == "Levenberg-Marquardt"
+    assert isinstance(r, tf.Result) and r.optimizer == "trust-region least squares"
     assert r.status == "converged" and r.reached == 3
     np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], x, rtol=1e-5)
     m2ll = rss / 0.09 + n * (np.log(2 * np.pi) + 2 * np.log(0.3))
@@ -90,18 +90,18 @@ def test_method_given_to_fit_stands_for_a_missing_method_line(tmp_path, oracle):
         tf.fit(p, method="optimise")
 
 
-def test_estimated_sd_by_bfgs(tmp_path, oracle):
+def test_estimated_sd_by_lbfgsb(tmp_path, oracle):
     """An additive sd does not move the least-squares point; at the minimum sd^2 = RSS/n."""
     x, rss, n = oracle
     r = tf.fit(problem(tmp_path, error="additive(0.5)"))
-    assert r.optimizer == "BFGS" and r.status == "converged"
+    assert r.optimizer == "L-BFGS-B" and r.status == "converged"
     np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], x, rtol=1e-4)
     assert r.estimates["conc.additive"] == pytest.approx(np.sqrt(rss / n), rel=1e-4)
 
 
 def test_a_proportional_error_of_known_sd_is_fitted_by_maximum_likelihood(tmp_path):
     """sd = 0.3 f changes with the parameters, so -2LL is not a sum of squares (its 2 log sd
-    terms move): BFGS on -2LL, at scipy's minimum of the closed form's -2LL."""
+    terms move): L-BFGS-B on -2LL, at scipy's minimum of the closed form's -2LL."""
     from scipy.optimize import minimize
 
     df = table()
@@ -115,7 +115,7 @@ def test_a_proportional_error_of_known_sd_is_fitted_by_maximum_likelihood(tmp_pa
     ml = minimize(m2ll, np.log([1.5, 0.04, 0.08]), method="Nelder-Mead",
                   options=dict(xatol=1e-10, fatol=1e-10, maxiter=20000))  # fmt: skip
     r = tf.fit(problem(tmp_path, error="proportional(fix(0.3))"))
-    assert r.optimizer == "BFGS" and r.status == "converged"
+    assert r.optimizer == "L-BFGS-B" and r.status == "converged"
     np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], np.exp(ml.x),
                                rtol=1e-4)  # fmt: skip
     assert r.m2ll == pytest.approx(ml.fun, abs=1e-6)
@@ -123,32 +123,38 @@ def test_a_proportional_error_of_known_sd_is_fitted_by_maximum_likelihood(tmp_pa
 
 def test_a_step_to_where_the_model_does_not_run_is_never_taken(tmp_path):
     """ka = sqrt(q) from a poor start with a small sd: the residuals are above 1000 sd, so a
-    failed run must cost more than any run; the fit ends where the model runs and counts the
-    failed runs it tried."""
+    failed run must cost more than any run; the fit ends where the model runs, at the optimum
+    (q = ka^2 = 1.511^2, or the ka-ke swap 0.0059: the same -2LL)."""
     p = problem(tmp_path, error="additive(fix(0.001))", extra="ka = sqrt(q)\n",
                 estimate="q = 0.005 in (-3, 5), CL = 0.2, ke = 0.1",
                 options="starts=1 seed=2 checks=quick")  # fmt: skip
     r = tf.fit(p)
     assert np.isfinite(r.m2ll) and r.estimates["q"] > 0
-    assert r.failed_runs > 0
+    assert min(abs(r.estimates["q"] - 1.51093826**2), abs(r.estimates["q"] - 0.0059)) < 1e-3
 
 
 def test_bounds_keep_values_inside(tmp_path):
+    """Bounds are kept as bounds (L-BFGS-B), on the log scale for a range above 0: the
+    estimate can sit on its bound."""
     with pytest.warns(O.NearBoundWarning, match="ka ended at 1.3, near its upper bound 1.3"):
         r = tf.fit(problem(tmp_path, estimate="ka = 1.2 in (1, 1.3), CL = 0.05, ke = 0.1"))
     assert 1 < r.estimates["ka"] <= 1.3
     assert r.estimates["ka"] == pytest.approx(1.3, abs=1e-3)  # the optimum lies above
-    assert r.scales[0] == ("logit", 1.0, 1.3)
+    assert r.scales[0] == ("log", 1.0, 1.3)
     assert r.near_bounds == {"ka": ("upper", 1.3)}
     assert "at a bound: ka ended at 1.3, near its upper bound 1.3" in repr(r)  # the doctor
+    # at an active bound ka is a result, not a ridge: the doctor must not call it undetermined
+    assert not [f for f in r.doctor().findings
+                if f.check == "ridge" and "ka" in f.evidence.get("quantities", [])]  # fmt: skip
 
 
 def test_one_sided_bounds(tmp_path, oracle):
-    """A bound on one side: estimated as lo + exp(u) or hi - exp(u). Away from the bound the
-    fit is scipy's; with the optimum beyond it, the estimate ends at the bound."""
+    """A bound on one side, kept as a bound: on the log scale above a bound of 0 or more, as
+    is below one. Away from the bound the fit is scipy's; with the optimum beyond it, the
+    estimate ends at the bound."""
     x, _, _ = oracle
     r = tf.fit(problem(tmp_path, estimate="ka = 1 in (0.5, inf), CL = 0.05 in (-inf, 1), ke = 0.1"))
-    assert r.scales[:2] == [("above", 0.5), ("below", 1.0)]
+    assert r.scales[:2] == [("log", 0.5, np.inf), ("as is", -np.inf, 1.0)]
     np.testing.assert_allclose([r.estimates[k] for k in ("ka", "CL", "ke")], x, rtol=1e-5)
     assert r.near_bounds == {}
     with pytest.warns(O.NearBoundWarning, match="ka ended at 1.3, near its upper bound 1.3"):
@@ -169,12 +175,11 @@ def test_failed_starts_are_drawn_again(tmp_path):
 
 
 def test_failed_runs_are_counted_with_their_causes(tmp_path):
-    """ka = sqrt(q) started at q = 0: the steps try q < 0, where the model does not run. Each
-    is counted (the optimizer's own flag is the last accepted point's, which ran), with the
-    cause TenQSP gives, and above 1 % of the runs the doctor warns."""
-    p = problem(tmp_path, estimate="q = 1, CL = 0.05, ke = 0.1", extra="ka = sqrt(q)\n",
-                options="starts=1")  # fmt: skip
-    p._params[0].start = 0.0
+    """ka = q, with no run above q = 1.3 (sqrt(1.3 - q) is not a number there) while the
+    optimum lies at 1.51: the steps keep trying beyond 1.3. Each failed run is counted, with
+    the cause TenQSP gives, and above 1 % of the runs the doctor warns."""
+    p = problem(tmp_path, estimate="q = 1.2, CL = 0.05",
+                extra="ka = q*sqrt(1.3 - q)/sqrt(abs(1.3 - q))\n", options="starts=1")  # fmt: skip
     r = tf.fit(p)
     assert r.failed_runs > 0.01 * r.evaluations > 0
     assert sum(r.failure_causes.values()) == min(r.failed_runs, O.FAILED_KEPT)
@@ -184,6 +189,33 @@ def test_failed_runs_are_counted_with_their_causes(tmp_path):
     assert "failed runs during the fit" in str(r.passport())
     ok = tf.fit(problem(tmp_path, options="starts=1"))
     assert ok.failed_runs == 0 and ok.evaluations > 0 and ok.failure_causes == {}
+
+
+def test_fit_scales_keep_bounds_as_bounds():
+    """The fits' scales: log above a bound of 0 or more, as is otherwise; the bounds kept
+    (``box``); ``statistical`` gives the scales of the priors and NUTS."""
+    inf = np.inf
+    bounds = [(-inf, inf), (-inf, inf), (0, 1), (2, inf), (-inf, 1), (-1, 1)]
+    x = np.array([1.0, -2.0, 0.5, 3.0, 0.0, 0.2])
+    sc = O.fit_scales(list("abcdef"), x, bounds)
+    assert sc == [("log",), ("as is",), ("log", 0.0, 1.0), ("log", 2.0, inf),
+                  ("as is", -inf, 1.0), ("as is", -1.0, 1.0)]  # fmt: skip
+    assert O.box(sc)[2:4] == [(-inf, 0.0), (np.log(2.0), inf)]
+    np.testing.assert_allclose(O.to_x(O.to_u(x, sc), sc), x, rtol=1e-12)
+    assert O.statistical(sc) == O.scales(list("abcdef"), x, bounds)
+
+
+def test_an_estimate_held_at_a_bound_by_the_scale_comes_back():
+    """A quantity started on its bound with its optimum inside (on the logit scale its
+    derivative there is 0, and fits ended on the bound): L-BFGS-B leaves the bound."""
+    sc = O.fit_scales(["d"], [1.0], [(0.0, 1.0)])
+
+    def fun(u):  # -2LL with its minimum at d = 0.7
+        d = np.exp(u[0])
+        return float(100 * (d - 0.7) ** 2), np.array([200 * (d - 0.7) * d])
+
+    r = O.minimize_bounded(fun, O.to_u([1.0], sc), sc, 200)
+    assert r["converged"] and np.exp(r["u"][0]) == pytest.approx(0.7, abs=1e-3)
 
 
 def test_scales():
@@ -204,7 +236,23 @@ def test_ctrl_c_keeps_the_work(tmp_path, monkeypatch):
             raise KeyboardInterrupt
         return None
 
+    # progress is looked at every 0.25 s, and this fit can end within that: from its second
+    # step each start waits for the stop (at most 30 s), like a fit too long to end first
+    minimize_bounded = O.minimize_bounded
+
+    def slow(fun, u0, sc, maxiter, *, accepted, stop, **k):
+        n = [0]
+
+        def waits(u, f):
+            accepted(u, f)
+            n[0] += 1
+            if n[0] >= 2:
+                stop.wait(30)
+
+        return minimize_bounded(fun, u0, sc, maxiter, accepted=waits, stop=stop, **k)
+
     monkeypatch.setattr(O._Progress, "update", update)
+    monkeypatch.setattr(O, "minimize_bounded", slow)
     r = tf.fit(problem(tmp_path))
     assert r.status == "stopped"
     assert len(r.trace) > 0 and np.isfinite(r.m2ll)
@@ -467,28 +515,6 @@ def test_failed_runs_far_from_the_estimates_are_a_note():
     assert f.severity == "warning" and "4 of the 30 checked near the estimates" in f.message
 
 
-def test_steps_are_capped():
-    """No quantity on a log or logit scale moves more than MAX_STEP in one step; one as is is
-    not capped; the direction is kept."""
-    import jax.numpy as jnp
-    import optimistix as optx
-
-    solver = O.capped(optx.LevenbergMarquardt(rtol=1e-8, atol=1e-8), [("log",), ("as is",)])
-
-    class Fixed(optx.AbstractDescent):
-        def init(self, y, f):
-            return None
-
-        def query(self, y, f, state):
-            return None
-
-        def step(self, step_size, state):
-            return jnp.array([46.0, 1000.0]), optx.RESULTS.successful
-
-    d, _ = O._Capped(Fixed(), solver.descent.cap).step(1.0, None)
-    np.testing.assert_allclose(d, [O.MAX_STEP, 1000.0 * O.MAX_STEP / 46.0])
-
-
 def test_an_estimate_at_its_bound_has_no_se_and_the_others_hold_it(tmp_path):
     """CL (true 0.04) bounded in (0.045, 0.06) ends at 0.045: marked "lower", no SE or
     interval; ka's and ke's SEs are those of the fit with CL fixed at 0.045."""
@@ -581,3 +607,23 @@ def test_a_value_on_a_bound_maps_to_a_finite_logit():
         u = to_u([np.float64(100.0)], sc), to_u([np.float64(0.3)], sc)
     assert np.all(np.isfinite(u)) and u[0][0] > 30 and u[1][0] < -30
     assert float(to_x(u[0], sc)[0]) == pytest.approx(100.0)
+
+
+def test_a_profile_stays_within_the_bounds(tmp_path):
+    """Bounds are kept as bounds by the fits, and by the profiles' walks and scans: no point
+    of a profile lies outside them (a lower bound excluding a second, flip-flop optimum must
+    keep it out of the profile too)."""
+    r = tf.fit(problem(tmp_path, estimate="ka = 1.4 in (1.2, 50), CL = 0.05, ke = 0.1",
+                       options="starts=1 checks=quick"))  # fmt: skip
+    prof = r.profile("ka")
+    assert (prof.table["value"] >= 1.2 - 1e-12).all() and (prof.table["value"] <= 50).all()
+
+
+def test_intervals_stay_within_the_bounds(tmp_path):
+    """The 95 % intervals from the standard errors are built on the logit scale within
+    bounds (the fits work on the log scale there), so they never cross a bound: ka = 1.511,
+    its lower bound 1.45, its interval on the log scale from 1.40."""
+    r = tf.fit(problem(tmp_path, estimate="ka = 1.5 in (1.45, 50), CL = 0.05, ke = 0.1",
+                       error="additive(3)", options="starts=1 checks=quick"))  # fmt: skip
+    lo, hi = r.table().set_index("quantity").loc["ka", ["CI 2.5 %", "CI 97.5 %"]]
+    assert 1.45 <= lo < r.estimates["ka"] < hi <= 50

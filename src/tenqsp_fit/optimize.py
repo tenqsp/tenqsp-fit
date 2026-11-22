@@ -1,27 +1,28 @@
 # SPDX-FileCopyrightText: 2026 Yonsei University Health System
 # SPDX-License-Identifier: Apache-2.0
 """``method optimize``: one set of parameters for all the data, by multi-start optimization
-(Optimistix) with TenQSP's exact derivatives.
+(SciPy) with TenQSP's exact derivatives (ADR 0001, ADR 0006).
 
 - **The optimizer.** With additive errors of known sd, -2LL is a sum of squares up to a
   constant of the data: ``(DV - f)/sd`` for each measured value,
-  ``sqrt(-2 log Phi((limit - f)/sd))`` for each censored one; Levenberg-Marquardt minimizes
-  it, with exact Jacobians. Otherwise (an error model's quantities estimated, or an sd that
-  changes with the prediction: proportional, combined, power, whose ``2 log sd`` terms change
-  with the parameters) -2LL is minimized by BFGS with its exact gradient
-  (Levenberg-Marquardt converges slowly there: the sd's terms do not go to zero at the
-  minimum; theophylline, pooled: 48-61 steps against 18 with sd fixed). Results report -2LL.
-- **Scales.** Each quantity is estimated on a scale where any value is allowed: within its
-  bounds ``(lo, hi)`` by ``lo + (hi - lo)*sigmoid(u)`` (one bound: ``lo + exp(u)``), else on the
-  log scale when its start is above 0, else as it is. The summary lists the scales.
+  ``sqrt(-2 log Phi((limit - f)/sd))`` for each censored one; the trust-region reflective
+  method (``scipy.optimize.least_squares``) minimizes it, with exact Jacobians. Otherwise (an
+  error model's quantities estimated, or an sd that changes with the prediction:
+  proportional, combined, power, whose ``2 log sd`` terms change with the parameters) -2LL is
+  minimized by L-BFGS-B with its exact gradient. Both keep bounds as bounds. A start ends at
+  the optimizer's own tests, or when its last STALL steps lowered -2LL by less than F_TOL.
+- **Scales.** A quantity with bounds ``(lo, hi)`` (or one bound) is estimated on the log scale
+  when ``lo >= 0``, else as it is, within its bounds; one without bounds on the log scale when
+  its start is above 0, else as it is (``fit_scales``). The summary lists the scales.
 - **Starts.** Start 1 is the values written; the others are drawn around them on those
-  scales (log scale: a factor within about 5 either way, 95 %; bounded: 1 on the logit scale;
-  as is: half the value, at least 0.5) with the ``seed``. A start whose run fails or gives a
-  non-finite residual is drawn again. Each start runs in its own thread, so the starts run
-  on separate cores (an infection-age model, 8 starts: 7x faster than one ``jax.vmap`` call,
-  which on the CPU runs them one after the other).
-- **Failed runs** during the fit are rejected steps: every residual becomes a large constant,
-  so the step is refused and the step size shrinks. They are counted.
+  scales (log scale: a factor within about 5 either way, 95 %; as is between two bounds: a
+  quarter of the range; as is: half the value, at least 0.5) with the ``seed``, within the
+  bounds. A start whose run fails or whose derivatives are not finite is drawn again. Each
+  start runs in its own thread, so the starts run on separate cores (an infection-age model,
+  8 starts: 7x faster than one ``jax.vmap`` call, which on the CPU runs them one after the
+  other).
+- **Failed runs** during the fit are rejected steps: -2LL (or every residual) becomes a large
+  constant, so the step is refused and shortened. They are counted where they are evaluated.
 - **Progress.** ``progress text``: a block rewritten in place in a terminal, a line every 10 s
   elsewhere. ``progress plot`` (the default in a notebook): the live plot (``live.py``).
   ``progress none`` for quiet. The record is kept (``result.trace``,
@@ -41,11 +42,9 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optimistix as optx
 import pandas as pd
 
 from .live import default_progress, draw_trace
@@ -62,11 +61,17 @@ FAILED_KEPT = 50  # failed runs whose cause is asked of TenQSP after the fit
 SPREAD_LOG = math.log(5) / 2  # starts on the log scale: 95 % within a factor 5
 MAX_REDRAWS = 20
 DEFAULT_MAXITER = 200
-# the largest move of a quantity in one step, on its log (or logit) scale: a factor 100. Along
-# a nearly flat direction the optimizers proposed steps of hundreds of powers of ten, where
-# the model does not run; each such step was rejected and halved about ten times
+# a failed run within this of the estimates (every quantity, on its estimation scale: a factor
+# 100) counts as near them (``failures_near``)
 MAX_STEP = math.log(100)
-TOL = 1e-8  # Levenberg-Marquardt's rtol and atol (changes of the parameters and of -2LL)
+TOL = 1e-8  # least squares: the change of the cost and of the parameters that ends a start
+GTOL = 1e-3  # L-BFGS-B: the largest projected derivative of -2LL (estimation scale) at the end
+# a start also ends when its last STALL steps lowered -2LL by less than F_TOL in all: far finer
+# than any comparison of fits needs. A stiff model at rtol 1e-6 carries an error of order 1 in
+# -2LL, but a bias that changes little between nearby values, so -2LL stops moving; with 1e-8
+# on -2LL and on the parameters a 16-start fit spent 65 % of 11 h lowering -2LL by < 1
+F_TOL = 1e-4
+STALL = 5
 SINGULAR = 1e-12  # Hessian eigenvalue ratio below which it is singular (no standard errors)
 
 
@@ -90,6 +95,62 @@ def scales(names, x0, bounds, kinds=None) -> list[tuple]:
             out.append(("log",))
         else:
             out.append(("as is",))
+    return out
+
+
+def fit_scales(names, x0, bounds, kinds=None) -> list[tuple]:
+    """The scales the fits work on: ``("log", lo, hi)`` or ``("as is", lo, hi)`` for a quantity
+    with bounds, which the optimizers keep as bounds (``box``), and ``("log",)`` or
+    ``("as is",)`` without. On a scale that maps the bounds away (``scales``: the logit within
+    ``(lo, hi)``) a quantity pushed near a bound has a derivative near 0 there and cannot come
+    back: fits ended on a bound, warned of it, 4.3 above the optimum in -2LL. The log scale for
+    a quantity whose lower bound is 0 or above (or whose distribution's family sets it), else
+    as it is."""
+    out = []
+    kinds = kinds or [None] * len(names)
+    for x, (lo, hi), kind in zip(x0, bounds, kinds, strict=True):
+        bounded = bool(np.isfinite(lo) or np.isfinite(hi))
+        if kind is not None:
+            base = kind
+        elif bounded:
+            base = "log" if np.isfinite(lo) and lo >= 0 else "as is"
+        else:
+            base = "log" if x > 0 else "as is"
+        if bounded and base == "log" and (lo < 0 or hi <= 0):  # a range allowing <= 0: as is
+            base = "as is"
+        out.append((base, float(lo), float(hi)) if bounded else (base,))
+    return out
+
+
+def box(sc) -> list[tuple[float, float]]:
+    """The bounds of each quantity on its estimation scale (-inf, inf for none)."""
+    out = []
+    for s in sc:
+        lo, hi = (s[1], s[2]) if s[0] in ("log", "as is") and len(s) == 3 else (-np.inf, np.inf)
+        if s[0] == "log":
+            lo = math.log(lo) if lo > 0 else -np.inf
+            hi = math.log(hi) if np.isfinite(hi) else np.inf
+        out.append((float(lo), float(hi)))
+    return out
+
+
+def into_box(u, sc) -> np.ndarray:
+    """``u`` moved into the bounds where it is outside them."""
+    b = np.array(box(sc), float).reshape(-1, 2)
+    return np.clip(np.asarray(u, float), b[:, 0], b[:, 1])
+
+
+def statistical(sc) -> list[tuple]:
+    """The fit scales as ``scales`` gives them (the logit within bounds, ``lo + exp(u)`` above
+    one bound): the scales that default priors and NUTS are defined on."""
+    out = []
+    for s in sc:
+        if s[0] in ("log", "as is") and len(s) == 3:
+            lo, hi = s[1], s[2]
+            out.append(("logit", lo, hi) if np.isfinite(lo) and np.isfinite(hi)
+                       else ("above", lo) if np.isfinite(lo) else ("below", hi))  # fmt: skip
+        else:
+            out.append(tuple(s))
     return out
 
 
@@ -142,6 +203,8 @@ def scale_text(names, sc) -> str:
         key = {"logit": "within bounds", "above": "above a bound", "below": "below a bound"}.get(
             s[0], s[0] + (" scale" if s[0] == "log" else "")
         )
+        if s[0] in ("log", "as is") and len(s) == 3:
+            key += ", bounded"
         groups.setdefault(key, []).append(n)
     return "; ".join(f"{k}: {' '.join(v)}" for k, v in groups.items())
 
@@ -153,6 +216,8 @@ def _spread(sc, x0) -> np.ndarray:
             if s[0] in ("log", "above", "below")
             else 1.0
             if s[0] == "logit"
+            else 0.25 * (s[2] - s[1])
+            if len(s) == 3 and np.isfinite(s[2] - s[1])
             else max(0.5 * abs(v), 0.5)
             for s, v in zip(sc, x0, strict=True)
         ]
@@ -298,8 +363,20 @@ def covariance(value, u, sc, *, gradient=None, held=(), names=None) -> dict:
     du = np.asarray(jax.jacfwd(lambda w: to_x(w, sc))(jnp.asarray(u)))
     D = np.diag(du)
     se = np.abs(D) * se_u
-    lo = np.asarray(to_x(jnp.asarray(u - 1.96 * se_u), sc))
-    hi = np.asarray(to_x(jnp.asarray(u + 1.96 * se_u), sc))
+    # the 95 % intervals on the statistical scales (the logit within bounds): they stay
+    # within the bounds, as before the fits kept bounds as bounds (on the log scale a bounded
+    # quantity's interval could cross its bound)
+    sc_s = statistical(sc)
+    x = np.asarray(to_x(jnp.asarray(u), sc))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        try:
+            u_s = to_u(x, sc_s)
+            ds = np.diag(np.asarray(jax.jacfwd(lambda w: to_x(w, sc_s))(jnp.asarray(u_s))))
+            se_s = np.abs(D / ds) * se_u
+        except (ValueError, ZeroDivisionError, OverflowError):  # pragma: no cover - on a bound
+            u_s, sc_s, se_s = np.asarray(u), sc, se_u
+        lo = np.asarray(to_x(jnp.asarray(u_s - 1.96 * se_s), sc_s))
+        hi = np.asarray(to_x(jnp.asarray(u_s + 1.96 * se_s), sc_s))
     cov_x = (D[:, None] * cov_u) * D[None, :]
     return dict(
         se=se,
@@ -670,37 +747,144 @@ class Result:
         return "\n".join(lines)
 
 
-class _Capped(optx.AbstractDescent):
-    """A descent whose step is shortened, keeping its direction, so that no quantity moves
-    more than ``cap`` (one per quantity; inf for none) in one step."""
+def minimize_bounded(
+    fun, u0, sc, maxiter, *, least_squares=False, accepted=None, stop=None
+) -> dict:
+    """One start: L-BFGS-B on -2LL (``fun(u) -> (value, gradient)``), or the trust-region
+    reflective method on a sum of squares (``fun(u) -> (residuals, jacobian)``), with the
+    bounds of ``sc`` kept as bounds. ``accepted(u, f)`` is told each step taken (``f``: the
+    minimized -2LL, or twice the cost); the start ends at the optimizers' own tests, when its
+    last STALL steps lowered it by less than F_TOL in all, or when ``stop`` is set. Returns
+    ``u``, ``f``, ``steps``, ``converged`` and a ``message`` (empty when converged cleanly)."""
+    from scipy.optimize import least_squares as lsq
+    from scipy.optimize import minimize
 
-    inner: optx.AbstractDescent
-    cap: jax.Array
+    seen: list[float] = []
+    why = [""]
 
-    def init(self, y, f_info_struct):
-        return self.inner.init(y, f_info_struct)
+    def step(intermediate_result):  # scipy passes the step by this name
+        r = intermediate_result
+        f = float(r.fun) if not least_squares else 2.0 * float(r.cost)
+        seen.append(f)
+        if accepted is not None:
+            accepted(np.asarray(r.x, float), f)
+        if stop is not None and stop.is_set():
+            why[0] = "stopped"
+            raise StopIteration
+        if len(seen) > STALL and seen[-STALL - 1] - seen[-1] < F_TOL:
+            why[0] = "settled"
+            raise StopIteration
 
-    def query(self, y, f_info, state):
-        return self.inner.query(y, f_info, state)
+    u0 = into_box(u0, sc)
+    b = np.array(box(sc), float).reshape(-1, 2)
+    if least_squares:
+        res = lsq(lambda u: fun(u)[0], u0, jac=lambda u: fun(u)[1], bounds=(b[:, 0], b[:, 1]),
+                  method="trf", x_scale="jac", ftol=TOL, xtol=TOL, gtol=TOL,
+                  max_nfev=maxiter, callback=step)  # fmt: skip
+        u, f = np.asarray(res.x, float), 2.0 * float(res.cost)
+        clean = res.status > 0
+    else:
+        res = minimize(fun, u0, jac=True, method="L-BFGS-B", bounds=[tuple(v) for v in b],
+                       callback=step, options={"maxiter": maxiter, "gtol": GTOL, "ftol": 1e-15,
+                                               "maxfun": 20 * maxiter})  # fmt: skip
+        u, f = np.asarray(res.x, float), float(res.fun)
+        clean = bool(res.success)
+    steps = len(seen)
+    if why[0] == "stopped":
+        return dict(u=u, f=f, steps=steps, converged=False, message="stopped")
+    if why[0] == "settled" or clean:
+        return dict(u=u, f=f, steps=steps, converged=True, message="")
+    if steps >= maxiter:
+        return dict(u=u, f=f, steps=steps, converged=False, message="max iterations")
+    # an end the optimizer could not take further (L-BFGS-B's line search finding no lower
+    # value: -2LL is then flat to the solver's precision there)
+    return dict(u=u, f=f, steps=steps, converged=True, message=f"ended: {res.message}")
 
-    def step(self, step_size, state):
-        d, result = self.inner.step(step_size, state)
-        shrink = jnp.min(jnp.where(jnp.abs(d) > self.cap, self.cap / jnp.abs(d), 1.0))
-        return d * shrink, result
 
+def run_bounded(
+    names,
+    sc,
+    U_start,
+    make,
+    maxiter,
+    progress,
+    label,
+    problem_name="",
+    timeout=None,
+    t_start=None,
+    least_squares=False,
+    const=0.0,
+) -> _Run:
+    """Every start in its own thread (JAX runs them on separate cores), with the live text
+    and Ctrl-C keeping the work. ``make(j, failed) -> (fun, accepted)`` builds start ``j``'s
+    function (see ``minimize_bounded``; ``failed(u)`` records a point where the model does not
+    run) and its hook for each step taken (or None). ``const`` turns the minimized value into
+    -2LL (least squares: a constant of the data). ``timeout``: seconds from ``t_start``."""
+    t_start = time.perf_counter() if t_start is None else t_start
+    n = len(U_start)
+    m2ll = np.full(n, np.nan)
+    X = np.array([np.asarray(to_x(jnp.asarray(u), sc)) for u in U_start])
+    steps = np.zeros(n, int)
+    done = np.zeros(n, bool)
+    failed = np.zeros(n, int)
+    evaluations = np.zeros(n, int)
+    failed_at: list[np.ndarray] = []
+    messages = [""] * n
+    trace: list[tuple] = []
+    stop = threading.Event()
+    lock = threading.Lock()  # a step's -2LL and values are shown together
 
-def capped(solver, sc):
-    """``solver`` with its steps capped at MAX_STEP for the quantities on a log or logit
-    scale (those as is have no natural size, and are not capped)."""
-    cap = jnp.array([np.inf if s[0] == "as is" else MAX_STEP for s in sc])
-    return eqx.tree_at(lambda v: v.descent, solver, _Capped(solver.descent, cap))
+    def run(j):
+        def on_failed(u):
+            failed[j] += 1
+            if len(failed_at) < FAILED_KEPT:
+                failed_at.append(np.asarray(to_x(jnp.asarray(u), sc)))
+
+        fun, hook = make(j, on_failed)
+
+        def counted(u):
+            evaluations[j] += 1
+            out = fun(u)
+            if evaluations[j] == 1:  # the start: the trace's step 0
+                v = out[0] if not least_squares else float(np.sum(np.asarray(out[0]) ** 2))
+                trace.append((j + 1, 0, float(v) + const,
+                              *np.asarray(to_x(jnp.asarray(u), sc))))  # fmt: skip
+            return out
+
+        def accepted(u, f):
+            if hook is not None:
+                hook(u)
+            xj = np.asarray(to_x(jnp.asarray(u), sc))
+            with lock:
+                steps[j] += 1
+                m2ll[j], X[j] = f + const, xj
+            trace.append((j + 1, int(steps[j]), f + const, *xj))
+
+        r = minimize_bounded(counted, U_start[j], sc, maxiter, least_squares=least_squares,
+                             accepted=accepted, stop=stop)  # fmt: skip
+        with lock:
+            X[j], m2ll[j] = np.asarray(to_x(jnp.asarray(r["u"]), sc)), r["f"] + const
+            steps[j] = max(int(steps[j]), r["steps"])
+        done[j] = r["converged"]
+        messages[j] = r["message"] if r["message"] not in ("", "stopped") else ""
+
+    workers = ThreadPoolExecutor(max_workers=max(1, min(n, os.cpu_count() or 1)))
+    shown = _Progress(progress, names, n, label, problem_name, trace)
+    futures = [workers.submit(run, j) for j in range(n)]
+    show = locked_show(shown, lock, steps, m2ll, X, done, t_start)
+    status, stopped_by = watch(futures, stop, timeout, t_start, show)
+    workers.shutdown()
+    show(last=True, status=status)
+    return _Run(X=X, steps=steps, done=done, failed=failed, failed_at=failed_at,
+                evaluations=evaluations, trace=trace, status=status, stopped_by=stopped_by,
+                messages=messages)  # fmt: skip
 
 
 # ----------------------------------------------------------------------------- the fit
 def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
     opts = problem._options
     names, x0 = obj.names, np.asarray(obj.x0, float)
-    sc = scales(names, x0, obj.bounds, obj.kinds)
+    sc = fit_scales(names, x0, obj.bounds, obj.kinds)
     n_starts = int(opts.get("starts", 1))
     rng = np.random.default_rng(int(opts.get("seed", 0)))
     maxiter = int(opts.get("maxiter") or DEFAULT_MAXITER)
@@ -712,105 +896,104 @@ def fit_optimize(problem, obj, *, progress=None, with_se=True) -> Result:
     penalty = written_penalty(problem, names, x0, sc)
     least_squares = obj.sum_of_squares and penalty is None
 
-    def total(x):  # what is minimized: -2LL, plus -2 log of the written priors
-        v = obj._minus2ll(x)
-        return v if penalty is None else v + penalty(x)
-
-    def residuals(u, args=None):
-        r = obj._residuals(to_x(u, sc))
-        ok = jnp.all(jnp.isfinite(r))
-        return jnp.where(ok, r, BAD), ok
-
-    def value(u, args=None):
-        v = total(to_x(u, sc))
-        ok = jnp.isfinite(v)
-        return jnp.where(ok, v, BAD_VALUE), ok
-
-    # ---- one start's steps, compiled once and shared by every start
-    if least_squares:
-        solver, fn = optx.LevenbergMarquardt(rtol=TOL, atol=TOL), residuals
+    # one compiled function of the model for the whole fit (``Objective.compiled_u``):
+    # -2LL (or the residuals), its derivatives and the run's steps, with the tolerances and the
+    # step limit as inputs; the written priors' terms, which need no solver, apart
+    core = obj.compiled_u(sc, residuals=least_squares)
+    if penalty is None:
+        pen = pen_grad = None
     else:
-        solver, fn = optx.BFGS(rtol=TOL, atol=TOL), value
-    solver = capped(solver, sc)
-    tags = frozenset()
-    f_struct, aux_struct = jax.eval_shape(lambda u: fn(u), jnp.asarray(to_u(x0, sc)))
-    # jax.jit, not eqx.filter_jit: filter_jit keeps every compiled function of every fit
-    # (about 760 memory maps each; Linux allows 65530 per process, so a long session or a
-    # profile ran out). The solver's state holds a traced function besides arrays, so its
-    # fixed part is kept here and only its arrays pass through jit.
-    u_shape = jnp.asarray(to_u(x0, sc))
-    shapes = eqx.filter_eval_shape(
-        lambda u: solver.init(fn, u, None, {}, f_struct, aux_struct, tags), u_shape
-    )
-    _, static = eqx.partition(shapes, lambda v: isinstance(v, jax.ShapeDtypeStruct))
+        pen = jax.jit(lambda u: penalty(to_x(u, sc)))
+        pen_grad = jax.jit(jax.grad(lambda u: penalty(to_x(u, sc))))
+    const = [0.0]  # least squares: -2LL = sum of squares + a constant of the data
+    limited = threading.Event()
 
-    def arrays(state):
-        return eqx.partition(state, eqx.is_array)[0]
+    def call(u, tol=None):
+        a, g, most = core(jnp.asarray(u), tol)
+        if not limited.is_set() and bool(jnp.all(jnp.isfinite(a))):  # the first run that ran
+            limited.set()
+            obj.limit_steps(int(most))
+        return a, g
 
-    runs = jax.jit(lambda u: fn(u)[1])
-    init = jax.jit(lambda u: arrays(solver.init(fn, u, None, {}, f_struct, aux_struct, tags)))
-    term = jax.jit(
-        lambda u, st: solver.terminate(fn, u, None, {}, eqx.combine(st, static), tags)[0]
-    )
+    def vg(u, tol=None):
+        """-2LL (plus the priors' terms) and its gradient on the fit scales, numpy."""
+        a, g = call(u, tol)
+        a, g = np.asarray(a, float), np.asarray(g, float)
+        if least_squares:
+            v, g = float(np.sum(a**2)) + const[0], 2.0 * (g.T @ a)
+        else:
+            v = float(a)
+        if pen is not None:
+            v += float(pen(jnp.asarray(u)))
+            g = g + np.asarray(pen_grad(jnp.asarray(u)))
+        return v, g
 
-    @jax.jit
-    def step(u, st):
-        # the step's aux is the last accepted point's, so whether the point tried ran is
-        # read here: a rejected step is checked by ``runs`` at the point it tried
-        state = eqx.combine(st, static)
-        tried = state.y_eval
-        u2, state2, _ = solver.step(fn, u, None, {}, state, tags)
-        done = solver.terminate(fn, u2, None, {}, state2, tags)[0]
-        f = 2.0 * state2.f_info.as_min() if least_squares else state2.f_info.f
-        rejected = state2.num_accepted_steps == state.num_accepted_steps
-        return u2, arrays(state2), done, rejected, tried, f
+    def runs(u):  # a start must run and have finite derivatives (none to follow otherwise)
+        a, g = call(u)
+        return bool(jnp.all(jnp.isfinite(a)) & jnp.all(jnp.isfinite(g)))
+
+    def make(j, failed):
+        def fun(u):
+            a, g = call(u)
+            a, g = np.asarray(a, float), np.asarray(g, float)
+            if not np.all(np.isfinite(a)) or not np.all(np.isfinite(g)):  # no derivatives
+                failed(u)
+                if least_squares:
+                    return np.full_like(a, BAD), np.zeros_like(g)
+                return BAD_VALUE, np.zeros_like(g)
+            if least_squares:
+                return a, g
+            v, g = float(a), g
+            if pen is not None:
+                v += float(pen(jnp.asarray(u)))
+                g = g + np.asarray(pen_grad(jnp.asarray(u)))
+            return v, g
+
+        return fun, None
 
     workers = ThreadPoolExecutor(max_workers=max(1, min(n_starts, os.cpu_count() or 1)))
     U_start, redrawn = draw_starts(problem, runs, x0, sc, rng, n_starts, workers)
+    workers.shutdown()
 
-    # sum of squares -> -2LL: a constant of the data (0 for BFGS, which minimizes -2LL)
-    const = 0.0
-    if least_squares:
-        const = float(obj(to_x(jnp.asarray(U_start[0]), sc))) - float(
-            jnp.sum(fn(jnp.asarray(U_start[0]))[0] ** 2)
-        )
+    if least_squares:  # the constant of the data (from the error model: no solver)
+        const[0] = float(obj.m2ll_from_residuals(to_x(jnp.asarray(U_start[0]), sc)))
 
-    total_jit = jax.jit(total)
-    run = run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers,
-                     "optimize", const, problem.name, total_jit, runs=runs,
-                     timeout=seconds(opts.get("timeout")), t_start=t_start)  # fmt: skip
-    final = np.array([float(v) for v in ThreadPoolExecutor(len(U_start)).map(obj, list(run.X))])
-    rank = final if penalty is None else np.array([float(total_jit(jnp.asarray(x)))
-                                                   for x in run.X])  # fmt: skip
+    run = run_bounded(names, sc, U_start, make, maxiter, progress, "optimize",
+                      problem.name, timeout=seconds(opts.get("timeout")), t_start=t_start,
+                      least_squares=least_squares, const=const[0])  # fmt: skip
+    U_end = [to_u(x, sc) for x in run.X]
+    rank = np.array([vg(u)[0] for u in U_end])  # what was minimized (with the priors' terms)
+    final = rank if pen is None else rank - np.array([float(pen(jnp.asarray(u))) for u in U_end])
     best = int(np.argmin(np.where(np.isfinite(rank), rank, np.inf)))
     if run.status == "stopped" or not with_se:
         cov = no_covariance(len(names), None if with_se else NOT_ASKED)
     else:
-        gradient = jax.jit(jax.grad(lambda u: total(to_x(u, sc))))
         at = near_bounds(names, run.X[best], user_bounds(problem, names))
-        cov = covariance(None, to_u(run.X[best], sc), sc,
-                         gradient=lambda u: gradient(jnp.asarray(u)),
+        cov = covariance(None, U_end[best], sc, gradient=lambda u: vg(u)[1],
                          held=[names.index(n) for n in at], names=names)  # fmt: skip
-    return finish(problem, obj, "optimize", "Levenberg-Marquardt" if least_squares else "BFGS",
+    return finish(problem, obj, "optimize",
+                  "trust-region least squares" if least_squares else "L-BFGS-B",
                   names, x0, sc, U_start, run, final, redrawn, user_bounds(problem, names),
                   t_start, objective=obj, rank=rank,
                   with_priors=None if penalty is None else float(rank[best]),
+                  notes=[m for m in run.messages if m], value_and_gradient=vg,
                   **cov)  # fmt: skip
 
 
 def draw_starts(problem, runs, x0, sc, rng, n_starts, workers):
     """Start 1 is the values written; the others are drawn around them; a start that does not
     run is drawn again. Returns the starts (on the estimation scale) and how many were redrawn."""
-    u0 = to_u(x0, sc)
+    u0 = into_box(to_u(x0, sc), sc)
     spread = _spread(sc, x0)
-    U = [u0] + [u0 + spread * rng.normal(size=len(u0)) for _ in range(n_starts - 1)]
+    U = [u0] + [into_box(u0 + spread * rng.normal(size=len(u0)), sc)
+                for _ in range(n_starts - 1)]  # fmt: skip
     redrawn = 0
     ok = [bool(v) for v in workers.map(lambda u: runs(jnp.asarray(u)), U)]
     for _ in range(MAX_REDRAWS):
         if all(ok):
             break
         for i in [i for i, v in enumerate(ok) if not v]:
-            U[i] = u0 + spread * rng.normal(size=len(u0))
+            U[i] = into_box(u0 + spread * rng.normal(size=len(u0)), sc)
             redrawn += 1
         ok = [bool(v) for v in workers.map(lambda u: runs(jnp.asarray(u)), U)]
     if not any(ok):
@@ -827,61 +1010,6 @@ def draw_starts(problem, runs, x0, sc, rng, n_starts, workers):
 class _Run:
     def __init__(self, **kw):
         self.__dict__.update(kw)
-
-
-def run_starts(names, sc, U_start, init, step, term, maxiter, progress, workers, label,
-               const=0.0, problem_name="", value=None, runs=None, timeout=None,
-               t_start=None) -> _Run:  # fmt: skip
-    """Every start in its own thread (JAX runs them on separate cores), with the live text
-    and Ctrl-C keeping the work. ``step(u, state) -> (u, state, done, rejected, tried, f)``;
-    ``runs(u)``: whether the model runs at ``u``, asked of each rejected step's point;
-    ``value(x)``, -2LL at a start, gives the trace its step 0. ``timeout``: seconds from
-    ``t_start`` (the fit's start) after which the starts stop as for Ctrl-C."""
-    t_start = time.perf_counter() if t_start is None else t_start
-    n = len(U_start)
-    m2ll = np.full(n, np.nan)
-    X = np.array([np.asarray(to_x(jnp.asarray(u), sc)) for u in U_start])
-    steps = np.zeros(n, int)
-    done = np.zeros(n, bool)
-    trace: list[tuple] = []
-    failed = np.zeros(n, int)
-    failed_at: list[np.ndarray] = []  # the points of failed runs (the first FAILED_KEPT)
-    stop = threading.Event()
-    lock = threading.Lock()  # a step's -2LL and values are shown together
-
-    def run(j):
-        u = jnp.asarray(U_start[j])
-        if value is not None:
-            trace.append((j + 1, 0, float(value(X[j])), *X[j]))
-        state = init(u)
-        if bool(term(u, state)):
-            done[j] = True
-            return
-        for it in range(1, maxiter + 1):
-            if stop.is_set():
-                return
-            u, state, d, rejected, tried, f = step(u, state)
-            if runs is not None and bool(rejected) and not bool(runs(tried)):
-                failed[j] += 1
-                if len(failed_at) < FAILED_KEPT:
-                    failed_at.append(np.asarray(to_x(tried, sc)))
-            fj, xj = float(f) + const, np.asarray(to_x(u, sc))
-            with lock:
-                steps[j], m2ll[j], X[j] = it, fj, xj
-            trace.append((j + 1, it, fj, *xj))
-            if bool(d):
-                done[j] = True
-                return
-
-    shown = _Progress(progress, names, n, label, problem_name, trace)
-    futures = [workers.submit(run, j) for j in range(n)]
-    show = locked_show(shown, lock, steps, m2ll, X, done, t_start)
-    status, stopped_by = watch(futures, stop, timeout, t_start, show)
-    workers.shutdown()
-    show(last=True, status=status)
-    return _Run(X=X, steps=steps, done=done, failed=failed, failed_at=failed_at,
-                evaluations=steps.copy(), trace=trace, status=status,
-                stopped_by=stopped_by)  # fmt: skip
 
 
 def locked_show(shown, lock, steps, m2ll, X, done, t_start):

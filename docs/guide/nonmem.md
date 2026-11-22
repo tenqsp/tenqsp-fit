@@ -71,7 +71,7 @@ fixed      none
 from model none
 formulas   none
 method     laplace (population, FOCE-I)
-options    rtol 1e-6 (default), starts 1 (default), seed 0 (default), maxiter 200 (default), checks full (default)
+options    rtol 1e-6 (default), starts 1 (default), seed 0 (default), maxiter 200 (default), checks full (default), cache on (default)
 near zero  kept above 0 by a smooth floor at 1e-6 (the solver's atol): f in conc ~ proportional
 ```
 
