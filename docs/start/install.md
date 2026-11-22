@@ -1,6 +1,7 @@
 # Install
 
-tenqsp-fit needs Python 3.12 or later. It installs TenQSP (0.8.2 or later) with it.
+tenqsp-fit needs Python 3.12 or later. It installs TenQSP (0.9.1 or later) with it, with
+TenQSP's native solver (numba): one command installs everything a fit needs.
 
 ```bash
 pip install tenqsp-fit                 # the library
@@ -8,6 +9,8 @@ pip install "tenqsp-fit[plot]"         # with plots (matplotlib)
 ```
 
 Keep the quotes (zsh, the default shell on macOS, reads the brackets otherwise).
+`pip install -U tenqsp-fit` upgrades an installed tenqsp-fit, and TenQSP with it when the new
+version needs a newer TenQSP. For TenQSP's labelled array output, add `"tenqsp[xarray]"`.
 
 To work on tenqsp-fit itself, from a clone of the repository:
 
@@ -56,7 +59,9 @@ tenqsp-fit is built on [TenQSP](https://tenqsp.github.io/tenqsp/) (the models an
 exact derivatives), [JAX](https://jax.readthedocs.io), [SciPy](https://scipy.org) (the
 optimizers, L-BFGS-B and trust-region least squares, and statistics),
 [NumPyro](https://num.pyro.ai) (the NUTS sampler), [ArviZ](https://python.arviz.org)
-(posterior summaries) and [pandas](https://pandas.pydata.org) (data and tables). Plots need
+(posterior summaries), [pandas](https://pandas.pydata.org) (data and tables) and
+[numba](https://numba.pydata.org) (TenQSP's native solver, which `options backend=auto`
+uses wherever the model allows). Plots need
 [matplotlib](https://matplotlib.org), installed with the `plot` extra (as above, or
 `pip install matplotlib`).
 
