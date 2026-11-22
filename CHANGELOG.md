@@ -5,6 +5,11 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-22
+Faster fits: TenQSP's native solver, bounds kept as bounds and a stopping rule on -2LL.
+Results can change: fits that stopped at a bound or before the minimum now reach it.
+Needs TenQSP 0.9.1.
+
 ### Added
 - **Models given by formulas of t** (NONMEM's `$PRED`): a model with no equations and
   outputs written as formulas, fitted by every method with no solver. A dose enters as a
