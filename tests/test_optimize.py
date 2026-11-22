@@ -236,7 +236,23 @@ def test_ctrl_c_keeps_the_work(tmp_path, monkeypatch):
             raise KeyboardInterrupt
         return None
 
+    # progress is looked at every 0.25 s, and this fit can end within that: from its second
+    # step each start waits for the stop (at most 30 s), like a fit too long to end first
+    minimize_bounded = O.minimize_bounded
+
+    def slow(fun, u0, sc, maxiter, *, accepted, stop, **k):
+        n = [0]
+
+        def waits(u, f):
+            accepted(u, f)
+            n[0] += 1
+            if n[0] >= 2:
+                stop.wait(30)
+
+        return minimize_bounded(fun, u0, sc, maxiter, accepted=waits, stop=stop, **k)
+
     monkeypatch.setattr(O._Progress, "update", update)
+    monkeypatch.setattr(O, "minimize_bounded", slow)
     r = tf.fit(problem(tmp_path))
     assert r.status == "stopped"
     assert len(r.trace) > 0 and np.isfinite(r.m2ll)
