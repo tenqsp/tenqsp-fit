@@ -5,6 +5,23 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+### Added
+- **`profile(name, values=[...])`**: the profile at values you choose, each side outward from
+  the estimate and every fit from its neighbour, so it follows one branch of the likelihood
+  (a loop of independent fits from fixed starts can jump between branches and draw a zigzag).
+  No walk, no scan, no stop at the cut-off; `points`, `step`, `scan` and `scan_range` are
+  refused with it.
+- **A one-sided limit for a quantity at its bound**: `profile()` of a quantity that ended at a
+  bound written for it (no standard error) goes away from the bound on a geometric grid of
+  distances and halves to the crossing of the one-sided cut-off (2.71 at 95 %), and reports
+  "ka at most 2.025": `Profile.one_sided`, a `doctor()` note, and the near-bound warning now
+  says to profile it. Before, such a profile used the two-sided cut-off and the usual walk.
+- **Ragged profiles repaired**: a point of the walk or of `values=` that lies above the line
+  between its neighbours is refitted from their fits, and replaced where that lowers −2LL
+  (its first fit had missed the optimum its neighbours found). `Profile.repaired` lists them,
+  and `doctor()` reports a ragged profile, advising `profile()` over hand-made loops of fits
+  from fixed starts, which can jump between branches of the likelihood.
+
 ### Fixed
 - **The doctor checks the gradient of a `method laplace` fit.** It left laplace out ("its
   gradient is itself a difference"), which stopped being true in 0.3.0. The fit's gradient

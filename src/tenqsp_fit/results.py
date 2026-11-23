@@ -629,6 +629,12 @@ class Profile:
     neighbouring point and from the ends of the fit's other starts: where the likelihood
     has a second optimum beyond a hump higher than the cut-off, the set of values within
     the cut-off has two pieces, and the walk alone sees only the one around the estimate.
+    ``one_sided``: for a quantity at a bound, the one-sided limit the data give ("words": at
+    most or at least, "limit", the bound "at", and how far the profile went), else None.
+    ``repaired``: points that were above the line between their neighbours and were
+    refitted from the neighbours' fits, lowering -2LL (each value, -2LL before and after):
+    their first fit had missed the optimum of its branch; the table has the refits (status
+    "refit").
     ``better``: a point of the profile with -2LL lower than the fit's (by more than 0.01:
     the fit missed a better optimum), or None; the cut-off is then from that point.
 
@@ -663,6 +669,8 @@ class Profile:
     better: dict | None = None
     objective: str = "-2LL"
     stopped_by: str | None = None
+    one_sided: dict | None = None
+    repaired: list = dataclasses.field(default_factory=list)
 
     def plot(self, ax=None):
         plt = _pyplot()
@@ -696,6 +704,14 @@ class Profile:
         return self.m2ll if self.better is None else float(self.better["-2LL"])
 
     def _set_text(self) -> str:
+        o = self.one_sided
+        if o is not None:
+            if np.isfinite(o["limit"]):
+                return (f"one-sided limit: {self.name} {o['words']} {o['limit']:.4g} (at its "
+                        f"{o['bound']} bound {o['at']:.4g})")  # fmt: skip
+            return (f"one-sided: no limit up to {o['profiled to']:.4g} (at its {o['bound']} "
+                    f"bound {o['at']:.4g})")  # fmt: skip
+
         def end(v):  # an end the profile did not reach is NaN in the data, said in words here
             return f"{v:.4g}" if np.isfinite(v) else "not reached"
 
@@ -753,9 +769,9 @@ class _Stopped(Exception):
     """A profile stopped by Ctrl-C (raised in its threads before the next point)."""
 
 
-def profile(result, name: str, *, points: int = 8, step: float | None = None,
-            level: float = 0.95, scan: bool = True, scan_range=None,
-            scan_points: int = 8) -> Profile:  # fmt: skip
+def profile(result, name: str, *, points: int | None = None, step: float | None = None,
+            level: float = 0.95, scan: bool | None = None, scan_range=None,
+            scan_points: int = 8, values=None) -> Profile:  # fmt: skip
     """Hold ``name`` at values on each side of its estimate (on its estimation scale, in
     steps of ``step``: by default half its standard error there, else 0.2), refit the rest
     from the neighbouring point, and stop a side once -2LL is past the cut-off (or after
@@ -766,7 +782,20 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     bottom of a dip there is found by golden section and each end of a piece by four
     halvings. The model is compiled once for every point (``tenqsp_fit.held``), the two sides
     run at the same time, and a line per point is printed (not with ``options
-    progress=none``)."""
+    progress=none``).
+
+    ``values``: the values to hold ``name`` at (on its own scale), instead of the walk and the
+    scan: each side of the estimate is visited outward from it, every fit starting from the
+    neighbouring one, so the profile follows one branch of the likelihood (independent fits
+    from fixed starts can jump between branches). All the values are fitted (no stop at the
+    cut-off); ``points``, ``step``, ``scan`` and ``scan_range`` do not apply.
+
+    A quantity that ended at a bound written for it (``result.near_bounds``; its standard
+    error is not computed) is profiled away from the bound only, on distances from it that
+    grow geometrically up to the other bound (or 100 times its start or estimate), the
+    crossing of the cut-off found by halving: the data give a one-sided limit ("at most" for a
+    lower bound), with the one-sided cut-off (the chi-square quantile at 2 level - 1, 2.71 for
+    95 %; Self and Liang 1987). ``Profile.one_sided`` has it."""
     from concurrent.futures import ThreadPoolExecutor
 
     from .held import held_fitter
@@ -777,15 +806,27 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
         from .errors import nearest
 
         raise ValueError(f"profile: '{name}' is not estimated.{nearest(name, names)}")
-    if not isinstance(scan, bool):
+    if scan is not None and not isinstance(scan, bool):
         raise TypeError("profile: scan= is True or False.")
+    if values is not None:
+        clash = [k for k, v in (("points", points), ("step", step), ("scan", scan),
+                                ("scan_range", scan_range)) if v is not None]  # fmt: skip
+        if clash:
+            raise TypeError(f"profile: values= gives the values to profile at; "
+                            f"{'=, '.join(clash)}= {'does' if len(clash) == 1 else 'do'} not "
+                            "apply with it.")  # fmt: skip
+    at_bound = (getattr(result, "near_bounds", None) or {}).get(name)  # (side, bound) or None
+    points = 8 if points is None else points
+    scan = values is None and at_bound is None if scan is None else scan
     j, sc = names.index(name), result.scales
     u_best = np.asarray(to_u(np.asarray(result.x, float), sc), float)
     u_hat = float(u_best[j])
     if step is None:
         se_u = np.sqrt(np.diag(getattr(result, "cov_u", np.full((len(names),) * 2, np.nan))))[j]
         step = 0.5 * float(se_u) if np.isfinite(se_u) and se_u > 0 else 0.2
-    cut, rule = _cut(level, result)
+    cut, rule = _cut(level if at_bound is None else 2 * level - 1, result)
+    if at_bound is not None:
+        rule += f"; one-sided, {name} is at its {at_bound[0]} bound"
     # the quantity the fit minimized: -2LL, plus the priors' terms when priors are written
     with_priors = getattr(result, "with_priors", None)
     ref = result.m2ll if with_priors is None else float(with_priors)
@@ -824,8 +865,28 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     from .optimize import box
 
     lo_box, hi_box = box(sc)[j]  # the profile stays within the quantity's bounds
+    plan = _plan(result, name, j, sc, u_hat, values, at_bound, (lo_box, hi_box))
+    if at_bound is not None and values is None and not quiet:
+        print(f"   profile {name}: at its {at_bound[0]} bound {at_bound[1]:.6g}; profiling away "
+              f"from it for a one-sided limit ({len(plan[1] or plan[-1])} values at most)",
+              flush=True)  # fmt: skip
+
+    def at_fn(sign, out):
+        """Fit at ``h`` (estimation scale) from each of ``starts``, keep the best as a row."""
+
+        def at(h, starts, what="refining"):
+            got = best_of(h, starts)
+            if got is None:
+                return None, np.nan
+            out.append(row(got[0], got[1], "scan" if plan[sign] is None else "value"))
+            say(out[-1], sign, what)
+            return got[0], got[1]
+
+        return at
 
     def _side(sign, out):
+        if plan[sign] is not None:
+            return _planned(sign, out)
         start, warm, u_end = u_best, None, u_hat
         for k in range(1, points + 1):
             if u_end in (lo_box, hi_box):  # the bound was the last point
@@ -841,6 +902,24 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
                 break
         if scan:
             scanned(sign, u_end, start, out[-1]["-2LL"] if out else np.nan, out)
+
+    def _planned(sign, out):
+        """The values of the plan on this side, outward from the estimate, each fit from the
+        last; at a bound, stop past the cut-off and halve back to the crossing."""
+        start, warm, last_in = u_best, None, (u_hat, u_best)
+        targets = plan[sign]
+        for k, h in enumerate(targets, start=1):
+            u, m2ll, status, warm = fit(h, start, warm)
+            if np.isfinite(m2ll):
+                start = u
+            out.append(row(u, m2ll, "value"))
+            say(out[-1], sign, f"value {k} of {len(targets)}")
+            if values is None and np.isfinite(m2ll):  # away from a bound
+                if m2ll - ref > cut:
+                    _halve(at_fn(sign, out), last_in[0], last_in[1], h,
+                           lambda m: m - ref <= cut, others)  # fmt: skip
+                    break
+                last_in = (h, u)
 
     others = _other_ends(result, sc, u_best)
     lo_u, hi_u = _scan_range(result, j, sc, u_hat, step, scan_range)
@@ -863,14 +942,7 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
             if abs(frac(far) - frac(u_from)) < 1e-3:
                 return
 
-        def at(h, starts, what="refining"):
-            got = best_of(h, starts)
-            if got is None:
-                return None, np.nan
-            out.append(row(got[0], got[1], "scan"))
-            say(out[-1], sign, what)
-            return got[0], got[1]
-
+        at = at_fn(sign, out)
         grid = u_from + (far - u_from) * np.arange(1, scan_points + 1) / scan_points
         pts = [(u_from, start, f_from)]  # the walk's end
         for k, h in enumerate(grid, start=1):
@@ -921,12 +993,26 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     table = pd.DataFrame([*lo_side, centre, *hi_side]).sort_values("value", kind="stable")
     table = table[["value", "-2LL", "status", *[n for n in names if n != name]]]
     table = table.reset_index(drop=True)
+    repaired = [] if stopped_by is not None else _repair(table, j, names, sc, result, best_of,
+                                                          row, quiet, name)  # fmt: skip
     low = float(np.nanmin(table["-2LL"]))
     better = None
     if low < ref - 0.01:
         better = table.loc[int(np.nanargmin(table["-2LL"].to_numpy()))].to_dict()
     floor = min(low, ref)
     pieces = _pieces(table, floor, cut)
+    one_sided = None
+    if at_bound is not None and values is None and pieces:
+        side_, b = at_bound
+        if side_ == "lower":  # the set starts at the bound itself
+            pieces[0] = (b, pieces[0][1])
+            limit, words = pieces[-1][1], "at most"
+        else:
+            pieces[-1] = (pieces[-1][0], b)
+            limit, words = pieces[0][0], "at least"
+        reached = float(table.value.max() if side_ == "lower" else table.value.min())
+        one_sided = {"bound": side_, "at": b, "limit": limit, "words": words,
+                     "profiled to": reached}  # fmt: skip
     interval = (pieces[0][0], pieces[-1][1]) if pieces else (float("nan"), float("nan"))
 
     def x_at(h):
@@ -937,9 +1023,106 @@ def profile(result, name: str, *, points: int = 8, step: float | None = None,
     p = Profile(name=name, estimate=float(result.x[j]), m2ll=ref, table=table,
                 interval=interval, level=level, cut=cut, rule=rule, pieces=pieces,
                 scanned=(x_at(lo_u), x_at(hi_u)) if scan else (float("nan"),) * 2,
-                better=better, objective=objective, stopped_by=stopped_by)  # fmt: skip
+                better=better, objective=objective, stopped_by=stopped_by,
+                one_sided=one_sided, repaired=repaired)  # fmt: skip
     p.seconds = time.perf_counter() - t0
     return p
+
+
+RAGGED = 0.01  # -2LL above the line between the neighbours by more than this: refit
+
+
+def _repair(table, j, names, sc, result, best_of, row, quiet, name, passes: int = 3) -> list:
+    """Refit from the neighbours' fits each point (of the walk or of ``values``; scan points
+    are already the best of several starts) whose -2LL is above the line between its
+    neighbours by more than ``RAGGED``; replace it (status "refit") where that is lower by
+    more than ``RAGGED``. A profile is the lowest -2LL at each value and curves upward around
+    its minimum, so such a point is either where the likelihood itself bends the other way
+    (a hump; refitting changes nothing) or a fit that missed the optimum its neighbours
+    found. Returns the repairs (``table`` is changed in place)."""
+    from .optimize import to_u
+
+    def u_of(i):
+        x = np.asarray(result.x, float).copy()
+        for k, n in enumerate(names):
+            x[k] = float(table.at[i, "value"]) if k == j else float(table.at[i, n])
+        return np.asarray(to_u(jnp.asarray(x), sc), float)
+
+    out = []
+    v = table["value"].to_numpy(dtype=float)
+    for _ in range(passes):
+        f = np.array(table["-2LL"], dtype=float)  # a copy: changed below
+        changed = False
+        for i in range(1, len(table) - 1):
+            if table.at[i, "status"] in ("estimate", "scan") or not np.isfinite(f[i]):
+                continue
+            if not v[i - 1] < v[i] < v[i + 1]:
+                continue
+            w = (v[i] - v[i - 1]) / (v[i + 1] - v[i - 1])
+            if not f[i] > (1 - w) * f[i - 1] + w * f[i + 1] + RAGGED:  # NaN neighbours: no
+                continue
+            got = best_of(float(u_of(i)[j]), [u_of(i - 1), u_of(i + 1)])
+            if got is None or not got[1] < f[i] - RAGGED:
+                continue
+            new = row(got[0], got[1], "refit")
+            out.append({"value": new["value"], "before": float(f[i]), "after": float(got[1])})
+            for col, val in new.items():
+                table.at[i, col] = val
+            f[i], changed = got[1], True
+            if not quiet:
+                print(f"   profile {name} = {new['value']:.4g}: refitted from its neighbours, "
+                      f"-2LL lower by {out[-1]['before'] - got[1]:.3g}", flush=True)  # fmt: skip
+        if not changed:
+            break
+    return out
+
+
+def _plan(result, name, j, sc, u_hat, values, at_bound, u_box, n_away: int = 13) -> dict:
+    """The values to hold ``name`` at on each side ({-1: below, 1: above}, estimation scale,
+    outward from the estimate), or None for a side the walk and scan cover."""
+    from .optimize import to_u, user_bounds
+
+    x = np.asarray(result.x, float)
+
+    def u_of(v):
+        y = x.copy()
+        y[j] = v
+        try:
+            with np.errstate(all="ignore"):
+                return float(np.asarray(to_u(y, sc))[j])
+        except ValueError:
+            return float("nan")
+
+    if values is not None:
+        v = np.atleast_1d(np.asarray(values, dtype=float))
+        if v.ndim != 1 or not len(v) or not np.all(np.isfinite(v)):
+            raise ValueError("profile: values= is a list of finite numbers.")
+        u = np.array([u_of(a) for a in v])
+        bad = v[~(np.isfinite(u) & (u >= u_box[0]) & (u <= u_box[1]))]
+        if len(bad):
+            raise ValueError(f"profile: {', '.join(f'{a:.6g}' for a in bad)} outside the range "
+                             f"of {name} (its bounds or its scale).")  # fmt: skip
+        return {-1: sorted(u[u < u_hat], reverse=True), 1: sorted(u[u > u_hat])}
+    if at_bound is None:
+        return {-1: None, 1: None}
+    side, b = at_bound
+    away = 1 if side == "lower" else -1
+    lo, hi = user_bounds(result.problem, [name])[0]
+    far = hi if side == "lower" else lo
+    try:
+        names0, x0, _ = result.problem._starts()
+        start = float(x0[list(names0).index(name)])
+    except (ValueError, AttributeError):
+        start = float("nan")
+    est = float(x[j])
+    scale = max(abs(a) for a in (start, b, est, 1e-12) if np.isfinite(a))
+    d_max = 0.999 * abs(far - b) if np.isfinite(far) else 100.0 * scale
+    d0 = max(2.0 * abs(est - b), 1e-6 * d_max)
+    if not d0 < d_max:
+        d0 = d_max / 10.0
+    u = [u_of(b + away * d) for d in np.geomspace(d0, d_max, n_away)]
+    u = [a for a in u if np.isfinite(a) and (a - u_hat) * away > 0]
+    return {away: u, -away: []}
 
 
 def _bottom(at, lo, hi, best, inside, others, times: int = 8):

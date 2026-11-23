@@ -265,6 +265,31 @@ four halvings. `scan_range=(low, high)` sets where the scan ends.
 The scan costs time: the theophylline profile of ke takes about 3 minutes with it and under
 a minute without. `scan=False` leaves it out.
 
+**At values you choose** (`values=[...]`). `result.profile("ke", values=[0.05, 0.07, 0.1])`
+holds ke at those values only: no walk, no scan, and every value is fitted, also past the
+cut-off. Each side of the estimate is visited outward from it, every fit starting from the
+neighbouring one, so the profile follows one branch of the likelihood. A loop of your own
+that fits each value from fixed starts can jump between branches where the likelihood has
+two, and draws a zigzag that is not the profile. `points`, `step`, `scan` and `scan_range`
+do not apply with `values`.
+
+**At a bound.** A quantity that ended at a bound written for it has no standard error (the
+summary and `doctor()` say it is at its bound). If the bound is real (a rate that cannot be
+negative, a fraction that cannot exceed 1), the data give a one-sided limit, not an estimate:
+the profile goes away from the bound only, on distances from it that grow geometrically up
+to the other bound (or 100 times the quantity's start or estimate), and finds where −2LL
+crosses the cut-off by halving. The cut-off is the one-sided one, the chi-square quantile at
+2 × level − 1 (2.71 for 95 %; Self and Liang 1987). `prof.one_sided` has the limit, and
+`doctor()` adds it as a note:
+
+```text
+<Profile of ka: estimate 2, 95% one-sided limit: ka at most 2.025 (at its lower bound 2), ...>
+[note] ka is at its lower bound 2; the data give ka at most 2.025 (95%, one-sided).
+```
+
+Report it as that inequality. If −2LL stays within the cut-off all the way, the profile says
+so: the data do not limit the quantity over the range profiled.
+
 While it runs, each point prints a line (not with `options progress=none`):
 
 ```text
@@ -280,10 +305,12 @@ While it runs, each point prints a line (not with `options progress=none`):
 
 | | What it is |
 |---|---|
-| `prof.table` | each value held, −2LL, `status` (`estimate`, `scan`, or the refit's status) and the other quantities' refitted values |
+| `prof.table` | each value held, −2LL, `status` (`estimate`, `scan`, `value` for `values=` or a profile from a bound, or the refit's status) and the other quantities' refitted values |
 | `prof.pieces` | each stretch of values within the cut-off, in order; NaN at an end the profile did not reach |
 | `prof.interval` | from the lowest to the highest value of the pieces |
 | `prof.cut`, `prof.rule` | the cut-off and which rule gave it |
+| `prof.repaired` | points that lay above the line between their neighbours and were refitted from the neighbours' fits with a lower −2LL (status `refit` in the table); the doctor reports them |
+| `prof.one_sided` | for a quantity at a bound: the one-sided limit (`words` "at most" or "at least", `limit`, the bound `at`, and `profiled to`); else None |
 | `prof.better` | a profile point whose −2LL is lower than the fit's by more than 0.01 (the fit missed a better optimum), or None |
 | `prof.plot()` | −2LL above the minimum against the value: walk points filled, scan points open, the cut-off dashed, the pieces shaded |
 

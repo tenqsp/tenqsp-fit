@@ -251,7 +251,9 @@ def near_bounds(names, x, bounds) -> dict[str, tuple[str, float]]:
 def near_bound_text(result) -> list[str]:
     return [
         f"{n} ended at {result.estimates[n]:.6g}, near its {side} bound {b:.6g}: the bound "
-        f"may be too tight, or the data do not determine {n}. Widen the bound, or fix {n}."
+        f"may be too tight, or the data do not determine {n}. Widen the bound, or fix {n}; "
+        f"if the bound is real, result.profile('{n}') gives the one-sided limit the data "
+        f"support ({'at most' if side == 'lower' else 'at least'} a value)."
         for n, (side, b) in result.near_bounds.items()
     ]
 
@@ -613,20 +615,24 @@ class Result:
         return vpc(self, n=n, seed=seed, bins=bins, percentiles=percentiles,
                    interval=interval, log=log, rtol=rtol, atol=atol, by=by)  # fmt: skip
 
-    def profile(self, name: str, *, points: int = 8, step: float | None = None,
-                level: float = 0.95, scan: bool = True, scan_range=None,
-                scan_points: int = 8):  # fmt: skip
+    def profile(self, name: str, *, points: int | None = None, step: float | None = None,
+                level: float = 0.95, scan: bool | None = None, scan_range=None,
+                scan_points: int = 8, values=None):  # fmt: skip
         """Profile likelihood of one estimated quantity: held at values on each side of its
         estimate, the others refitted; then (``scan``, the default) scanned further out, so
         that a second optimum shows as a second piece of the set. Returns a ``Profile``
         (``.table``, ``.pieces``, ``.interval`` over all pieces, ``.cut``, ``.rule``,
         ``.better``, ``.plot()``); ``scan=False``: the walk only (faster). The cut-off is the
         small-sample one when the residual SD is estimated and the data are individual or
-        pooled (see ``Profile``); otherwise the chi-square one."""
+        pooled (see ``Profile``); otherwise the chi-square one. ``values=[...]``: at those
+        values only, each fit from its neighbour (one branch of the likelihood). A quantity
+        at its bound is profiled away from it: ``.one_sided`` has the limit the data give
+        ("at most" for a lower bound)."""
         from .results import profile
 
         prof = profile(self, name, points=points, step=step, level=level, scan=scan,
-                       scan_range=scan_range, scan_points=scan_points)  # fmt: skip
+                       scan_range=scan_range, scan_points=scan_points,
+                       values=values)  # fmt: skip
         self.__dict__.setdefault("_profiles", {})[name] = prof  # the passport shows its shape
         d = getattr(self, "_doctor", None)
         if d is not None:  # the doctor already ran: add what this profile found
@@ -636,7 +642,11 @@ class Result:
                 f
                 for f in d.findings
                 if not f.message.startswith(
-                    (f"the {prof.level:.0%} profile set of {name} ", f"the profile of {name} ")
+                    (
+                        f"the {prof.level:.0%} profile set of {name} ",
+                        f"the profile of {name} ",
+                        f"{name} is at its ",
+                    )
                 )
             ]
             d.findings = sorted([*d.findings, *profile_findings({name: prof})],
