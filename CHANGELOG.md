@@ -5,6 +5,14 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+### Fixed
+- **A start that ends with a value exactly on its bound no longer loses the fit.** When one
+  start of a multi-start fit ended with an estimate on a lower bound of 0 (for example an
+  error term at 0 after exp(u) underflowed), mapping the endpoints back to the fit's scales
+  raised `ValueError: math domain error` after the optimization had finished, and the best
+  fit was lost. Such a value now maps to a large finite value on the fit's scale, as a
+  value on a bound already did for bounded quantities.
+
 ## [0.3.0] — 2026-11-22
 Faster fits: TenQSP's native solver, bounds kept as bounds and a stopping rule on -2LL.
 Results can change: fits that stopped at a bound or before the minimum now reach it.

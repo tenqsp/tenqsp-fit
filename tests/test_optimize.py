@@ -627,3 +627,33 @@ def test_intervals_stay_within_the_bounds(tmp_path):
                        error="additive(3)", options="starts=1 checks=quick"))  # fmt: skip
     lo, hi = r.table().set_index("quantity").loc["ka", ["CI 2.5 %", "CI 97.5 %"]]
     assert 1.45 <= lo < r.estimates["ka"] < hi <= 50
+
+
+def test_a_value_on_its_bound_maps_to_a_finite_u():
+    """An endpoint with a value exactly on its bound (exp(u) underflowed to 0, or a start that
+    ended there) maps to a large finite u, on every scale, and back to the bound."""
+    sc = [("log",), ("log", 0.0, 1.0), ("above", 2.0), ("below", 1.0), ("logit", 0.0, 1.0)]
+    x = np.array([0.0, 0.0, 2.0, 1.0, 0.0])
+    u = O.to_u(x, sc)
+    assert np.all(np.isfinite(u)) and np.all(u[:4] < -700)
+    np.testing.assert_allclose(O.to_x(u, sc), x, atol=1e-14)  # logit clamps at 1e-15
+
+
+def test_a_start_ending_on_a_bound_does_not_lose_the_fit(tmp_path, monkeypatch):
+    """One start of several ends with its estimated sd at exactly 0 (a junk basin): the fit
+    still finishes and reports the best start (before, math.log(0) raised after the
+    optimization had finished)."""
+    run_bounded = O.run_bounded
+
+    def junk_last_start(names, *args, **kw):
+        run = run_bounded(names, *args, **kw)
+        j = next(i for i, n in enumerate(names) if "additive" in n)
+        run.X = np.array(run.X, float)
+        run.X[-1, j] = 0.0
+        return run
+
+    monkeypatch.setattr(O, "run_bounded", junk_last_start)
+    p = problem(tmp_path, error="additive(0.3)")
+    r = tf.fit(p)
+    assert r.status == "converged"
+    assert r.estimates["conc.additive"] > 0.01

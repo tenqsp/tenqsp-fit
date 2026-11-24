@@ -180,18 +180,23 @@ def to_x(u, sc):
     return jnp.stack(parts)
 
 
+_TINY = sys.float_info.min  # log(_TINY) = -708: a large finite u
+
+
 def to_u(x, sc) -> np.ndarray:
+    """``x`` on the fit's scales. A value on its bound (a start that ended there, or exp(u)
+    underflowing to 0) maps to a large finite u, not to -inf or an error."""
     out = []
     for v, s in zip(x, sc, strict=True):
-        if s[0] == "logit":  # a value on a bound maps to a large finite u, not to +-inf
+        if s[0] == "logit":
             p = min(max((v - s[1]) / (s[2] - s[1]), 1e-15), 1 - 1e-15)
             out.append(math.log(p / (1 - p)))
         elif s[0] == "above":
-            out.append(math.log(v - s[1]))
+            out.append(math.log(max(v - s[1], _TINY)))
         elif s[0] == "below":
-            out.append(math.log(s[1] - v))
+            out.append(math.log(max(s[1] - v, _TINY)))
         elif s[0] == "log":
-            out.append(math.log(v))
+            out.append(math.log(max(v, _TINY)))
         else:
             out.append(float(v))
     return np.array(out)
