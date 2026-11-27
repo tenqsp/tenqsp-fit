@@ -5,6 +5,11 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-11-27
+A bug-fix release. Needs TenQSP 0.9.2, which fixes three cases where transport could make a
+field negative and speeds up sparse solves for models with an inflow that depends on an
+integral of a field.
+
 ### Fixed
 - **A start that ends with a value exactly on its bound no longer loses the fit.** When one
   start of a multi-start fit ended with an estimate on a lower bound of 0 (for example an

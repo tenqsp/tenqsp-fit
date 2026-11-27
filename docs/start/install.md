@@ -1,6 +1,6 @@
 # Install
 
-tenqsp-fit needs Python 3.12 or later. It installs TenQSP (0.9.1 or later) with it, with
+tenqsp-fit needs Python 3.12 or later. It installs TenQSP (0.9.2 or later) with it, with
 TenQSP's native solver (numba): one command installs everything a fit needs.
 
 ```bash
