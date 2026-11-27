@@ -290,7 +290,7 @@ def test_provenance_records_the_file_hash_and_filters(tmp_path):
 
 def test_spaces_around_names_and_values(tmp_path):
     f = tmp_path / "pk.csv"
-    f.write_text(nonmem(n=1).to_csv(index=False, na_rep=".").replace(",", ", "))
+    f.write_text(nonmem(n=1).to_csv(index=False, na_rep=".").replace(",", ", "), "utf-8")
     p = problem(str(f))
     assert p.units() == problem(nonmem(n=1)).units()
 
@@ -459,7 +459,8 @@ def test_doses_into_a_field_as_fit_text(tmp_path):
         "doses AMTA at t=2 into C[phage=a]\ndoses AMTB at t=2 into C[phage=b]\n"
         "observe Ca = DV where DVID == 1\nobserve Cb = DV where DVID == 2\n"
         "estimate k[a] = 0.2\nestimate k[b] = 0.2\n"
-        "error Ca ~ proportional(0.1)\nerror Cb ~ proportional(0.1)\nmethod optimize\n"
+        "error Ca ~ proportional(0.1)\nerror Cb ~ proportional(0.1)\nmethod optimize\n",
+        "utf-8",
     )
     p = tf.load(tmp_path / "two.tq")
     assert [d.into for d in p._doses] == ["C[phage=a]", "C[phage=b]"]

@@ -56,6 +56,16 @@ exclude = ["docs/examples/theoph_run", "validation/*/results", "validation/*/*.l
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 120
+# a text file opened without encoding= reads or writes in the system's code page, not UTF-8
+# (on Windows, a Korean one breaks a non-ASCII file); CI sets PYTHONWARNDEFAULTENCODING=1 so
+# that this fails on every system. Other packages' own reads are theirs to fix.
+filterwarnings = [
+    "error::EncodingWarning",
+    "ignore::EncodingWarning:jax",
+    "ignore::EncodingWarning:matplotlib",
+    "ignore::EncodingWarning:numba",
+    "ignore::EncodingWarning:threadpoolctl",
+]
 markers = [
     "slow: minutes each (NUTS runs, validation against references); CI runs them after the others",
 ]

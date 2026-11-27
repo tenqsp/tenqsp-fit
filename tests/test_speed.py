@@ -56,7 +56,7 @@ def _fit_in_new_process(tmp_path, cache_dir, option=""):
     env = {**os.environ, "TENQSP_FIT_CACHE": str(cache_dir),
            "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "0"}  # fmt: skip
     out = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True,
-                         text=True, timeout=600)  # fmt: skip
+                         encoding="utf-8", timeout=600)  # fmt: skip
     assert out.returncode == 0, out.stderr
     return out.stdout
 
@@ -75,8 +75,9 @@ def test_cache_writes_compiled_code_and_off_writes_nothing(tmp_path):
 def test_one_xla_thread_on_import_unless_set():
     code = "import os, tenqsp_fit; print(os.environ.get('XLA_FLAGS'))"
     env = {k: v for k, v in os.environ.items() if k != "XLA_FLAGS"}
-    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                         encoding="utf-8")  # fmt: skip
     assert out.stdout.strip() == _jax_setup.ONE_THREAD
     out = subprocess.run([sys.executable, "-c", code], env={**env, "XLA_FLAGS": ""},
-                         capture_output=True, text=True)  # fmt: skip
+                         capture_output=True, encoding="utf-8")  # fmt: skip
     assert out.stdout.strip() == ""  # set by the user (even empty): left as it is

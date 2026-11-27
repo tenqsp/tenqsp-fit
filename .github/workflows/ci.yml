@@ -33,6 +33,9 @@ jobs:
     timeout-minutes: 180
     env:
       JAX_PLATFORMS: cpu
+      # a text file opened without encoding= warns, and the tests turn that into a failure
+      # (pyproject.toml): Linux reads UTF-8 anyway and would not show it otherwise
+      PYTHONWARNDEFAULTENCODING: "1"
       FULL: ${{ github.ref_type == 'tag' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v5

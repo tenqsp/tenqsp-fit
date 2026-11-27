@@ -183,8 +183,8 @@ def test_passport(pk_fit, tmp_path):
     md = pp.markdown()
     assert md.startswith("# Passport: pk") and "quantity | estimate | SE" in md
     folder = pk_fit.save(tmp_path / "run")
-    assert (folder / "passport.md").read_text().startswith("# Passport: pk")
-    assert json.loads((folder / "passport.json").read_text())["run"]["problem"] == "pk"
+    assert (folder / "passport.md").read_text("utf-8").startswith("# Passport: pk")
+    assert json.loads((folder / "passport.json").read_text("utf-8"))["run"]["problem"] == "pk"
 
 
 def test_flat_directions_sharing_quantities_are_one_finding():

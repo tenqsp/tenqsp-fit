@@ -323,7 +323,7 @@ def test_live_plot_page(tmp_path, monkeypatch, capsys):
     import matplotlib
 
     assert matplotlib.get_backend() == backend  # the session's backend is left alone
-    page = Path(url.removeprefix("file://")).read_text()
+    page = Path(url.removeprefix("file://")).read_text("utf-8")
     assert "data:image/png;base64," in page
     assert "http-equiv" not in page  # the last page no longer refreshes
     assert "optimize  2 starts:" in out  # the text's last line
@@ -474,7 +474,7 @@ def test_fits_do_not_keep_compiled_code(tmp_path):
     import gc
 
     def maps():
-        with open("/proc/self/maps") as f:
+        with open("/proc/self/maps", encoding="utf-8") as f:
             return sum(1 for _ in f)
 
     tf.fit(problem(tmp_path, options="starts=1"))
