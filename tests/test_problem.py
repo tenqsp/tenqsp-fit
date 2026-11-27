@@ -47,8 +47,8 @@ def pk_table(n=3):
 @pytest.fixture
 def folder(tmp_path):
     pk_table().to_csv(tmp_path / "pk.csv", index=False, na_rep=".")
-    (tmp_path / "pk_pop.tq").write_text(PK + FIT)
-    (tmp_path / "pk.tq").write_text(PK)
+    (tmp_path / "pk_pop.tq").write_text(PK + FIT, "utf-8")
+    (tmp_path / "pk.tq").write_text(PK, "utf-8")
     return tmp_path
 
 
@@ -109,7 +109,7 @@ def test_tenqsp_reads_the_model_part(folder):
 
 
 def test_fit_part_in_its_own_file(folder):
-    (folder / "fit_only.tq").write_text(FIT)
+    (folder / "fit_only.tq").write_text(FIT, "utf-8")
     p = tf.load(folder / "fit_only.tq", model="pk.tq")
     assert p.name == "pk_pop"
     assert p == tf.load(folder / "pk_pop.tq")
@@ -594,7 +594,7 @@ def test_a_dose_column_time_below_0_is_refused():
 
 
 def test_load_names_a_problem_from_any_file_name(folder):
-    (folder / "pk-pop v2.tq").write_text(PK + FIT.replace("fit pk_pop", "fit"))
+    (folder / "pk-pop v2.tq").write_text(PK + FIT.replace("fit pk_pop", "fit"), "utf-8")
     assert tf.load(folder / "pk-pop v2.tq").name == "pk_pop_v2"
 
 

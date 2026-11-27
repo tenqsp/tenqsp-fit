@@ -372,7 +372,7 @@ simulates the fitted curves without the fit:
 
 ```python
 fitted = result.model()
-open("fitted.tq", "w").write(fitted.to_text())
+open("fitted.tq", "w", encoding="utf-8").write(fitted.to_text())
 ```
 
 A parameter that varies between units takes its typical value. When values differ between

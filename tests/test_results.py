@@ -263,12 +263,12 @@ def test_save(pooled, tmp_path):
     assert {"problem.tq", "data.csv", "estimates.csv", "starts.csv", "trace.csv", "sdtab.csv",
             "patab.csv", "result.txt", "run.json", "trace.png", "gof.png",
             "individual.png"} <= names  # fmt: skip
-    run = json.loads((out / "run.json").read_text())
+    run = json.loads((out / "run.json").read_text("utf-8"))
     assert run["status"] == "converged" and run["m2ll"] == pytest.approx(pooled.m2ll)
     assert set(run["versions"]) >= {"tenqsp_fit", "tenqsp", "jax"}
     import hashlib
 
-    text = (out / "problem.tq").read_text()
+    text = (out / "problem.tq").read_text("utf-8")
     assert run["hashes"]["problem.tq"] == hashlib.sha256(text.encode()).hexdigest()
     assert tf.Problem.from_text(text) == pooled.problem  # it reads back to the same problem
 

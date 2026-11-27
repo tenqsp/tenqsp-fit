@@ -188,7 +188,8 @@ assert np.allclose(compare["ratio"], 1, atol=2e-3)
 row = final.table().set_index("quantity")
 for q in ("V_kg", "apgar"):
     print(f"{q}: SE {row.loc[q, 'SE']:.4f} here, {ref_nonmem.loc[q, 'se']:.4f} in NONMEM")
-assert abs(final.m2ll - float(open(REF + "reference_population_nlme_m2ll.txt").read())) < 1
+with open(REF + "reference_population_nlme_m2ll.txt", encoding="utf-8") as f:
+    assert abs(final.m2ll - float(f.read())) < 1
 assert np.isclose(e["V_kg"], ref_nlme.loc["V_kg", "estimate"], rtol=0.02)
 
 # %% [markdown]
