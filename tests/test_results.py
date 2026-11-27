@@ -228,6 +228,100 @@ def test_profile_scan_options(pooled):
         pooled.profile("CL", scan="yes")
 
 
+def _ssr_held(name, value):
+    """The closed form's least-squares SSR with ``name`` (ka or ke) held, the rest refitted."""
+    df = table()
+    others = [n for n in ("ka", "CL", "ke") if n != name]
+
+    def r(lx):
+        p = dict(zip(others, np.exp(lx), strict=True)) | {name: value}
+        return conc(df.TIME.to_numpy(), df.Dose.to_numpy(), p["ka"], p["CL"], p["ke"]) - df.DV
+
+    start = {"ka": 1.5, "CL": 0.04, "ke": 0.08}
+    fit = least_squares(r, np.log([start[n] for n in others]), xtol=1e-14, ftol=1e-14,
+                        gtol=1e-14)  # fmt: skip
+    return float(np.sum(fit.fun**2))
+
+
+def test_profile_at_given_values(pooled):
+    """values=: those values only, each side outward from the estimate, -2LL as the closed
+    form's at each; no walk, no scan, no stop at the cut-off."""
+    vals = [0.05, 0.07, 0.095, 0.12]
+    pr = pooled.profile("ke", values=vals)
+    t = pr.table
+    assert list(t.status) == ["value", "value", "estimate", "value", "value"]
+    np.testing.assert_allclose(t.value[t.status == "value"], vals, rtol=1e-12)
+    base = _ssr_held("ke", pooled.estimates["ke"])
+    for v, m in zip(t.value, t["-2LL"], strict=True):
+        np.testing.assert_allclose(m - pooled.m2ll, (_ssr_held("ke", v) - base) / 0.09,
+                                   atol=2e-4)  # fmt: skip
+    assert (t["-2LL"].iloc[[0, -1]] - pooled.m2ll > pr.cut).all()  # past the cut-off: kept
+    with pytest.raises(TypeError, match="scan= does not apply"):
+        pooled.profile("ke", values=vals, scan=True)
+    with pytest.raises(TypeError, match="points=, step= do not apply"):
+        pooled.profile("ke", values=vals, points=3, step=0.1)
+    with pytest.raises(ValueError, match="-0.1 outside the range of ke"):
+        pooled.profile("ke", values=[-0.1, 0.1])
+
+
+def test_profile_repairs_a_point_that_missed_its_optimum(tmp_path, monkeypatch):
+    """A point whose fit missed the optimum (here made to report -2LL 3 units too high) sits
+    above both neighbours; refitted from the neighbours' fits it gets the closed form's value
+    back, the table says "refit", and doctor() reports a ragged profile."""
+    import tenqsp_fit.held as H
+
+    r = tf.fit(problem(tmp_path, options="starts=1"))
+    bad = float(np.log(0.08))  # ke = 0.08 on its (log) estimation scale
+    real = H.held_fitter
+
+    def fitter(result, j):
+        fit = real(result, j)
+
+        def missed(h, start, *warm):
+            u, m2ll, status, w = fit(h, start, *warm)
+            if warm and abs(h - bad) < 1e-9:  # the first fit at 0.08, not the refit
+                m2ll = m2ll + 3.0
+            return u, m2ll, status, w
+
+        return missed
+
+    monkeypatch.setattr(H, "held_fitter", fitter)
+    vals = [0.07, 0.074, 0.08, 0.084, 0.088]  # within the 95 % interval, (0.070, 0.081)
+    pr = r.profile("ke", values=vals)
+    assert len(pr.repaired) == 1 and pr.repaired[0]["value"] == pytest.approx(0.08)
+    assert pr.repaired[0]["before"] - pr.repaired[0]["after"] == pytest.approx(3.0, abs=1e-3)
+    t = pr.table.set_index("value")
+    assert t.loc[t.index[np.isclose(t.index, 0.08)][0], "status"] == "refit"
+    base = _ssr_held("ke", r.estimates["ke"])
+    for v, m in zip(pr.table.value, pr.table["-2LL"], strict=True):
+        np.testing.assert_allclose(m - r.m2ll, (_ssr_held("ke", v) - base) / 0.09, atol=2e-4)
+    d = r.doctor()
+    assert any(f.check == "ragged profile" and "values=" in f.remedy for f in d.findings)
+    # with no missed fit, nothing is repaired
+    monkeypatch.setattr(H, "held_fitter", real)
+    assert not r.profile("ke", values=vals).repaired
+
+
+def test_profile_at_a_bound_gives_a_one_sided_limit(tmp_path):
+    """ka bounded to (2, 10) with the truth 1.5: the fit rests on the bound and ka has no
+    standard error. The profile goes up from the bound only and gives the one-sided limit
+    (cut-off 2.71 for 95 %), where the closed form's -2LL has risen by that much."""
+    r = tf.fit(problem(tmp_path, estimate="ka = 3 in (2, 10), CL = 0.05, ke = 0.1",
+                       options="starts=1"))  # fmt: skip
+    assert r.near_bounds["ka"][0] == "lower"
+    pr = r.profile("ka")
+    o = pr.one_sided
+    assert o["words"] == "at most" and o["at"] == 2.0
+    assert pr.cut == pytest.approx(2.7055, abs=1e-4) and "one-sided" in pr.rule
+    assert pr.interval == (2.0, o["limit"]) and 2.0 < o["limit"] < 10.0
+    assert (pr.table.value >= 2.0 - 1e-9).all()  # nothing below the bound
+    rise = (_ssr_held("ka", o["limit"]) - _ssr_held("ka", 2.0)) / 0.09
+    assert rise == pytest.approx(pr.cut, rel=0.05)  # linear between profile points
+    assert f"ka at most {o['limit']:.4g}" in repr(pr)
+    d = r.doctor()
+    assert any(f.check == "one-sided limit" and "at most" in f.message for f in d.findings)
+
+
 def test_profile_small_sample_cut_off(tmp_path):
     """With the residual SD estimated, the cut-off is n log(1 + F/(n - p)) and the interval
     ends where the closed form's n log(SSR(ke) / SSR_min) (the SD profiled out) reaches it;

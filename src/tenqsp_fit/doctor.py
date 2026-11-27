@@ -937,6 +937,36 @@ def profile_findings(profiles) -> list[Finding]:
                 "standard error; to separate the optima, more informative data (a design "
                 "that tells them apart) or prior knowledge.",
                 {"pieces": pieces}))  # fmt: skip
+        fixed = getattr(prof, "repaired", None) or []
+        if fixed:
+            worst = max(r["before"] - r["after"] for r in fixed)
+            out.append(Finding(
+                "ragged profile", "warning",
+                f"the profile of {name} had {len(fixed)} point{'s' if len(fixed) > 1 else ''} "
+                f"above the line between its neighbours; refitted from the neighbours' fits, "
+                f"-2LL fell by up "
+                f"to {worst:.3g}: the first fit there had missed the optimum its neighbours "
+                "found (the profile now has the refits).",
+                "if you computed a profile yourself by refitting at each value from fixed "
+                "starts, use result.profile() or result.profile(name, values=[...]) instead: "
+                "each fit starts from its neighbour, so the profile follows one branch of the "
+                "likelihood; more starts do not stop a loop from jumping between branches.",
+                {"points": [r["value"] for r in fixed], "largest drop": worst}))  # fmt: skip
+        o = getattr(prof, "one_sided", None)
+        if o is not None:
+            if np.isfinite(o["limit"]):
+                msg = (
+                    f"{name} is at its {o['bound']} bound {o['at']:.4g}; the data give "
+                    f"{name} {o['words']} {o['limit']:.4g} ({prof.level:.0%}, one-sided)."
+                )
+            else:
+                msg = (f"{name} is at its {o['bound']} bound {o['at']:.4g}, and -2LL stays "
+                       f"within the one-sided cut-off up to {o['profiled to']:.4g}: the data do "
+                       f"not limit {name} over that range.")  # fmt: skip
+            out.append(Finding(
+                "one-sided limit", "note", msg,
+                f"report {name} as this inequality, not as an estimate with a standard error.",
+                {"limit": o["limit"], "bound": o["at"]}))  # fmt: skip
         better = getattr(prof, "better", None)
         if better is not None:
             out.append(Finding(

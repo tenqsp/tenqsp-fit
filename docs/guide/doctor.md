@@ -158,6 +158,15 @@ When `result.profile(name)` has run, its findings join the doctor's:
   optima the data cannot tell apart. Report the whole set.
 - **better fit in the profile** (problem): a profile point fits better than the estimate; the
   fit missed an optimum. Refit with more starts, or from that point.
+- **ragged profile** (warning): a point of the profile lay above the line between its
+  neighbours, and refitting it from their fits lowered −2LL: its first fit had missed the
+  optimum its neighbours found. The profile already has the refit. If you drew a profile
+  yourself by refitting each value from fixed starts, use `result.profile()` or
+  `result.profile(name, values=[...])` instead: each fit starts from its neighbour, so the
+  profile follows one branch of the likelihood, which more starts do not guarantee.
+- **one-sided limit** (note): the quantity is at a bound written for it, and the profile gives
+  the limit the data support, such as "ka at most 2.025 (95%, one-sided)". Report that
+  inequality, not an estimate with a standard error.
 
 See [profile likelihood](results.md#profile-likelihood).
 

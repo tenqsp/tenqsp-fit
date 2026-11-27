@@ -609,6 +609,20 @@ def test_a_value_on_a_bound_maps_to_a_finite_logit():
     assert float(to_x(u[0], sc)[0]) == pytest.approx(100.0)
 
 
+@pytest.mark.parametrize("v, s, inside", [(0.0, ("log",), 1.0), (-0.1, ("log", 1e-3, 10.0), 1.0),
+                                          (2.0, ("above", 2.0), 3.0), (5.0, ("below", 4.0), 3.0),
+                                          (100.0, ("logit", 0.3, 100.0), 99.0)])  # fmt: skip
+def test_strict_refuses_a_value_its_scale_cannot_hold(v, s, inside):
+    """A value on or beyond a bound of its scale maps to a large finite u for a fit's
+    endpoints, but strict (a value a user asks for, as in profile values=) refuses it."""
+    from tenqsp_fit.optimize import to_u
+
+    assert np.isfinite(to_u([v], [s])[0])
+    with pytest.raises(ValueError, match="on or beyond a bound"):
+        to_u([v], [s], strict=True)
+    assert np.isfinite(to_u([inside], [s], strict=True)[0])
+
+
 def test_a_profile_stays_within_the_bounds(tmp_path):
     """Bounds are kept as bounds by the fits, and by the profiles' walks and scans: no point
     of a profile lies outside them (a lower bound excluding a second, flip-flop optimum must
