@@ -23,7 +23,10 @@ found with its numbers, and what to do.
 - **gradient check**: the exact directional derivative against central differences
   at rtol / 100, along 3 random directions, at 3 points drawn from the estimates' normal
   approximation where -2LL is within the 99 % chi-square bound of the best (NUTS: at 3
-  draws); a warning above 1 %. Not for ``laplace``, whose gradient is itself a difference.
+  draws); a warning above 1 %. ``laplace``: the fit's gradient (by the implicit function
+  theorem; on the native backend, or with many model parameters, its terms are differences at
+  fixed modes at the fit's rtol) against differences of -2LL at rtol / 100 with the modes
+  found again at each point.
 - **jumps in the model**: extinction groups, lag times, and the jumps TenQSP's
   ``validate`` notes (``floor``, ``ceil``, ``rem``, conditions switching cell by cell).
 - **failed runs**: counted with their causes; a warning above 1 % of the fit's runs, unless
@@ -164,8 +167,7 @@ def examine(result, *, quick: bool | None = None, say=None) -> Doctor:
                                    "by formulas of t, so no solver runs."))  # fmt: skip
             else:
                 out += _tolerance_nuts(result) if nuts else _tolerance(result)
-            if result.method != "laplace":
-                out += _gradients_nuts(result) if nuts else _gradients(result)
+            out += _gradients_nuts(result) if nuts else _gradients(result)
         except KeyboardInterrupt:
             out.append(Finding("tolerance and gradient checks", "note", "stopped (Ctrl-C) "
                                "before they ended."))  # fmt: skip
@@ -669,9 +671,12 @@ def _se(shift: float) -> str:
 
 
 def _gradients(result) -> list[Finding]:
+    from .laplace import Laplace
     from .optimize import to_u, to_x
 
     obj, sc = result.objective, result.scales
+    if isinstance(obj, Laplace):
+        return _gradients_laplace(result)
     tight, rtol2 = _tighter(obj, result.problem)
     u0 = np.asarray(to_u(np.asarray(result.x), sc))
     C = np.asarray(getattr(result, "cov_u", np.nan), float)
@@ -704,6 +709,39 @@ def _gradients(result) -> list[Finding]:
     return [_gradient_finding(rel, rtol2, result.problem)]
 
 
+def _gradients_laplace(result) -> list[Finding]:
+    """The Laplace gradient (implicit function theorem) against central differences of -2LL
+    at the tighter tolerances, each with the modes found again from the best fit's. Also
+    where the fit's gradient is itself made of differences (``obj._quadratic`` False: the
+    native backend gives no second derivatives): those are at the fit's rtol with the modes
+    held, so the check finds their noise and any error in how the modes move."""
+    from .optimize import to_u
+
+    obj = result.objective
+    tight, rtol2 = _tighter(obj._cond, result.problem)
+    Z = np.asarray(result.modes)
+    u0 = np.asarray(to_u(np.asarray(result.x), result.scales))
+    C = np.asarray(getattr(result, "cov_u", np.nan), float)
+    try:
+        L = np.linalg.cholesky(C)
+    except np.linalg.LinAlgError:
+        L = 0.1 * np.eye(len(u0))
+    rng = np.random.default_rng(int(result.problem._options.get("seed", 0)))
+    f1 = lambda w: obj.evaluate(w, Z, gradient=False)[0]  # noqa: E731
+    f2 = lambda w: obj.evaluate(w, Z, gradient=False, tol=tight)[0]  # noqa: E731
+    rel = []
+    for u in _plausible(f1, u0, L, f1(u0), rng):
+        u = np.asarray(u)
+        d = rng.normal(size=len(u0))
+        d /= np.linalg.norm(d)
+        exact = float(obj.evaluate(u, Z)[2] @ d)
+        h = GRAD_STEP
+        fd = (f2(u + h * d) - f2(u - h * d)) / (2 * h)
+        rel.append(abs(fd - exact) / max(abs(fd), abs(exact), 1e-2))
+    what = None if obj._quadratic else "the fit's gradients (differences at fixed modes)"
+    return [_gradient_finding(rel, rtol2, result.problem, "laplace", what)]
+
+
 def _plausible(f, u0, L, best, rng):
     """``GRAD_DIRECTIONS`` points drawn from the estimates' normal approximation (with their
     correlations) where -2LL is within the 99 % chi-square bound of the best: the region the
@@ -725,15 +763,21 @@ def _plausible(f, u0, L, best, rng):
     return out or [jnp.asarray(u0)]
 
 
-def _gradient_finding(rel, rtol2, problem) -> Finding:
+def _gradient_finding(rel, rtol2, problem, method=None, what=None) -> Finding:
     worst = float(np.max(rel))
     ev = {"relative differences": [float(r) for r in rel], "rtol of the differences": rtol2}
     text = (
-        f"exact gradients agree with differences (at rtol {rtol2:g}) to {100 * worst:.2g} %"
+        f"{what or 'exact gradients'} agree with differences (at rtol {rtol2:g}) to "
+        f"{100 * worst:.2g} %"
         f" ({len(rel)} directions)"
     )
     if worst > GRAD_REL:
         rtol = float(problem._options.get("rtol") or 1e-6)
+        if method == "laplace":
+            return Finding("gradient check", "warning",
+                           text + ": the fit may have stopped short of the minimum.",
+                           f"a tighter rtol (options rtol={rtol / 10:g}); if the difference "
+                           "stays, report it: the gradient is wrong.", ev)  # fmt: skip
         return Finding("gradient check", "warning",
                        text + ": not consistent enough for NUTS, which needs exact gradients.",
                        f"a tighter rtol (options rtol={rtol / 10:g}).", ev)  # fmt: skip

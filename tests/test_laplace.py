@@ -97,13 +97,16 @@ def test_laplace_is_exact_for_a_linear_model(tmp_path):
 )
 def test_gradient_by_the_implicit_function_theorem(tmp_path, dist, x, quadratic):
     """Against central differences of -2LL (each with its own inner fit), through the units'
-    quadratic predictions and by differences of first derivatives."""
+    quadratic predictions and by differences of first derivatives. The quadratic needs second
+    derivatives, which only the JAX backend gives (on the native one the fit uses
+    differences)."""
     est = f"estimate A ~ {dist}\nestimate B ~ normal(mean=0.5, sd=1)\nestimate k = 0.2\n"
-    p = lin_problem(tmp_path, estimate=est)
+    p = lin_problem(tmp_path, estimate=est, options="backend=jax" if quadratic else "")
     obj = tf.objective(p)
     obj._quadratic = quadratic  # before the first call compiles it
     u = to_u(np.array(x), obj.scales)
     _, Z, g, dz = obj.evaluate(u)
+    assert obj._quadratic == quadratic  # not fallen back to differences
     h, E = 1e-5, np.eye(len(u))
 
     def f(w):
@@ -321,3 +324,39 @@ def test_the_fitted_model_holds_the_typical_values(tmp_path):
     assert values["A"] == pytest.approx(e["A.mean"], rel=1e-12)
     assert values["B"] == pytest.approx(e["B.mean"], rel=1e-12)
     assert values["k"] == pytest.approx(e["k"], rel=1e-12)
+
+
+def test_the_doctor_checks_the_gradient(tmp_path):
+    """The gradient by the implicit function theorem (JAX backend: exact) against differences
+    of -2LL: they agree after a fit, and a wrong gradient (10 % too large) is a warning."""
+    from tenqsp_fit import doctor as Dr
+
+    r = tf.fit(lin_problem(tmp_path, options="backend=jax"))
+    assert r.objective._quadratic
+    grad = next(f for f in r.doctor().findings if f.check == "gradient check")
+    assert grad.severity == "note" and grad.message.startswith("exact gradients agree")
+    assert max(grad.evidence["relative differences"]) < 1e-3
+    assert len(grad.evidence["relative differences"]) == Dr.GRAD_DIRECTIONS
+
+    evaluate = r.objective.evaluate
+
+    def wrong(u, Z0=None, *, gradient=True, tol=None):
+        v, Z, g, dz = evaluate(u, Z0, gradient=gradient, tol=tol)
+        return v, Z, None if g is None else 1.1 * g, dz
+
+    r.objective.evaluate = wrong
+    (bad,) = Dr._gradients(r)
+    assert bad.severity == "warning" and "stopped short of the minimum" in bad.message
+
+
+def test_the_doctor_checks_a_gradient_made_of_differences(tmp_path):
+    """On the native backend (no second derivatives) the fit's gradient is differences at
+    fixed modes; the check still runs, against differences at rtol / 100 with the modes found
+    again, and says which gradient it checked."""
+    pytest.importorskip("numba")
+    r = tf.fit(lin_problem(tmp_path, options="backend=native"))
+    assert not r.objective._quadratic
+    grad = next(f for f in r.doctor().findings if f.check == "gradient check")
+    assert grad.severity == "note"
+    assert grad.message.startswith("the fit's gradients (differences at fixed modes) agree")
+    assert max(grad.evidence["relative differences"]) < 1e-3
