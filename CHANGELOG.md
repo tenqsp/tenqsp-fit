@@ -30,6 +30,11 @@ versioning; `0.x` releases may change the API.
   derivatives, the gradient's terms are differences at fixed modes, and the check finds their
   noise; with the JAX backend it is exact. Theophylline: agreement to 0.0014 % (native),
   0.0022 % (JAX); both reach the same -2LL, 353.9837. A gradient off by 10 % is a warning.
+- **`profile(scan_range=...)` with an end its scale cannot hold** (0 or below for a quantity
+  on the log scale, a bound itself): since 0.3.1, which maps a fit's value on a bound to a
+  large finite one, such an end was taken as about 1e-308 and the scan ran towards it. That
+  side is again left unscanned, as before 0.3.1. Found with `values=` (under Added),
+  which refuses such values.
 - The test of the exact laplace gradient ran on the native backend and so tested the
   differences instead; it now runs on JAX and checks that the exact path was used.
 

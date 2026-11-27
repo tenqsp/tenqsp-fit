@@ -1089,7 +1089,7 @@ def _plan(result, name, j, sc, u_hat, values, at_bound, u_box, n_away: int = 13)
         y[j] = v
         try:
             with np.errstate(all="ignore"):
-                return float(np.asarray(to_u(y, sc))[j])
+                return float(np.asarray(to_u(y, sc, strict=True))[j])
         except ValueError:
             return float("nan")
 
@@ -1206,7 +1206,7 @@ def _scan_range(result, j, sc, u_hat, step, scan_range) -> tuple[float, float]:
             y = x.copy()
             y[j] = v
             try:
-                return float(to_u(y, sc)[j])
+                return float(to_u(y, sc, strict=True)[j])
             except ValueError:
                 return float("nan")
 

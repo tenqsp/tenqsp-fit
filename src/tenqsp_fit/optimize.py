@@ -183,11 +183,15 @@ def to_x(u, sc):
 _TINY = sys.float_info.min  # log(_TINY) = -708: a large finite u
 
 
-def to_u(x, sc) -> np.ndarray:
+def to_u(x, sc, strict: bool = False) -> np.ndarray:
     """``x`` on the fit's scales. A value on its bound (a start that ended there, or exp(u)
-    underflowing to 0) maps to a large finite u, not to -inf or an error."""
+    underflowing to 0) maps to a large finite u, not to -inf or an error. With ``strict`` a
+    value on or beyond a bound of its scale raises ValueError instead (a value a user asks
+    for, such as a profile's ``values=``, that the scale cannot hold)."""
     out = []
     for v, s in zip(x, sc, strict=True):
+        if strict and not _inside(v, s):
+            raise ValueError(f"{v!r} is on or beyond a bound of its scale")
         if s[0] == "logit":
             p = min(max((v - s[1]) / (s[2] - s[1]), 1e-15), 1 - 1e-15)
             out.append(math.log(p / (1 - p)))
@@ -200,6 +204,17 @@ def to_u(x, sc) -> np.ndarray:
         else:
             out.append(float(v))
     return np.array(out)
+
+
+def _inside(v, s) -> bool:
+    """Whether ``v`` lies strictly inside the range its scale ``s`` maps to finite u."""
+    if s[0] == "logit":
+        return s[1] < v < s[2]
+    if s[0] in ("above", "log"):
+        return v > (s[1] if s[0] == "above" else 0.0)
+    if s[0] == "below":
+        return v < s[1]
+    return math.isfinite(v)
 
 
 def scale_text(names, sc) -> str:
