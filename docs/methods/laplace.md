@@ -71,9 +71,9 @@ minimizes its FOCE objective. Its gradient includes how the modes move with the 
 the solver's sensitivities fixed). The gradient is exact: one run gives each unit's
 predictions with their first and second derivatives by its model parameters (TenQSP's
 sensitivities, differentiated once more), and every term of the gradient is an automatic
-derivative of the quadratic they make. Where TenQSP gives no second derivatives (a model with
-events, or on its sparse tier for large models), or the model has many parameters set by the
-fit, the terms are central differences (step 10⁻⁴ on the estimation scale) of the objective
+derivative of the quadratic they make. Where TenQSP gives no second derivatives (its native
+solver, the default where it applies; a model with events; its sparse tier for large models),
+or the model has many parameters set by the fit, the terms are central differences (step 10⁻⁴ on the estimation scale) of the objective
 and of its exact derivative by the scores, at fixed modes. The fit ends when the largest
 derivative of −2LL on the estimation scale is below 10⁻³.
 

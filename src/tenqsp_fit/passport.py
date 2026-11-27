@@ -181,8 +181,6 @@ def passport(result) -> Passport:
         data["failed_runs"] = {"count": int(getattr(result, "failed_runs", 0)),
                                "evaluations": int(getattr(result, "evaluations", 0)),
                                "causes": dict(getattr(result, "failure_causes", {}))}  # fmt: skip
-    if result.method == "laplace":
-        lines.append("gradient check: not for laplace (its gradient is itself a difference)")
     sections.append(("Numerical checks", lines))
 
     # 6. named predictions

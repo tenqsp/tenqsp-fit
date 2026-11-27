@@ -5,6 +5,17 @@ versioning; `0.x` releases may change the API.
 
 ## [Unreleased]
 
+### Fixed
+- **The doctor checks the gradient of a `method laplace` fit.** It left laplace out ("its
+  gradient is itself a difference"), which stopped being true in 0.3.0. The fit's gradient
+  is now checked as for `optimize`: against central differences of -2LL at rtol / 100, with
+  the modes found again at each point. On the native backend, which gives no second
+  derivatives, the gradient's terms are differences at fixed modes, and the check finds their
+  noise; with the JAX backend it is exact. Theophylline: agreement to 0.0014 % (native),
+  0.0022 % (JAX); both reach the same -2LL, 353.9837. A gradient off by 10 % is a warning.
+- The test of the exact laplace gradient ran on the native backend and so tested the
+  differences instead; it now runs on JAX and checks that the exact path was used.
+
 ## [0.3.1] — 2026-11-27
 A bug-fix release. Needs TenQSP 0.9.2, which fixes three cases where transport could make a
 field negative and speeds up sparse solves for models with an inflow that depends on an

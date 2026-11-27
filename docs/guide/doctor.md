@@ -180,8 +180,12 @@ The optimizers and the sampler use TenQSP's exact derivatives. The doctor checks
 central differences, at `rtol` / 100, along 3 random directions, at 3 points drawn from the
 estimates' approximate distribution where −2LL is within the 99 % chi-square bound of the best
 (the region the data allow). A difference above 1 % is a **warning**: not consistent enough for
-NUTS, which needs exact gradients. Not run after `laplace`, whose gradient is itself computed
-by differences.
+NUTS, which needs exact gradients; after `laplace`, the fit may have stopped short of the
+minimum. A `laplace` fit's gradient follows the implicit function theorem; on the native
+backend its terms are differences at the fit's `rtol` with the modes held fixed (the native
+solver gives no second derivatives). The check compares it with differences at `rtol` / 100
+with the modes found again at each point, so it finds the noise of the fit's differences as
+well as an error in how the modes move.
 
 The tolerance and gradient checks solve the model again: a few seconds for small models,
 a minute or two for large ones. `options checks=quick` leaves them out, and a note says so.
@@ -258,19 +262,19 @@ data file theoph.csv SHA-256 6536b3614f8d34de4de407a7f28b26657038e1e0239c704d7e4
 columns: ID=Subject, TIME=Time, DV=conc
 rows: 132; measurements 132, linked 132; doses 12
 data as read SHA-256 a1d839ceef82514b7de1befce5e24e811ebcc9b2868a5dd238b68e2431a608f9
-versions: tenqsp_fit 0.3.0, tenqsp 0.9.1, jax 0.11.2, numpy 2.5.3, pandas 3.1.0, python 3.12.16, scipy 1.18.1, numpyro 0.22.0, arviz_stats 1.3.3
-platform Linux x86_64; 41 s
+versions: tenqsp_fit 0.3.2.dev0, tenqsp 0.9.2, jax 0.12.1, numpy 2.5.5, pandas 3.1.1, python 3.12.15, scipy 1.18.1, numpyro 0.22.0, arviz_stats 1.3.3
+platform Linux x86_64; 6 s
 all units run as one build of the model (TenQSP pads the shorter ones with slots at t = +inf; this changes the results by about the solver's tolerance)
 
 Each quantity
 -------------
      quantity  estimate       SE  CI 2.5 %  CI 97.5 % determined profile prior
-    ka.median  1.619518 0.320713  1.098549   2.387548        yes
-     ka.sdlog  0.656425 0.150018  0.419421   1.027354        yes
+    ka.median  1.619522 0.320714  1.098551   2.387554        yes
+     ka.sdlog  0.656426 0.150018  0.419422   1.027355        yes
     CL.median  0.039544 0.002353  0.035190   0.044436        yes
-     CL.sdlog  0.167511 0.036433  0.109372   0.256554        yes
+     CL.sdlog  0.167510 0.036433  0.109372   0.256553        yes
            ke  0.084964 0.004342  0.076865   0.093916        yes  closed
-conc.additive  0.707770 0.048153  0.619412   0.808733        yes
+conc.additive  0.707771 0.048153  0.619413   0.808734        yes
 
 Ridges and determined combinations
 ----------------------------------
@@ -285,8 +289,8 @@ note, optima: one start: other optima were not looked for. What to do: options s
 Numerical checks
 ----------------
 note, tolerance check: at rtol 1e-08 the -2LL changes by 2.2e-05 and the estimates by less than 0.001 SE; rtol 1e-06 is enough.
-failed runs during the fit: 0 of 22 (0 %); starts redrawn: 0
-gradient check: not for laplace (its gradient is itself a difference)
+note, gradient check: the fit's gradients (differences at fixed modes) agree with differences (at rtol 1e-08) to 0.0014 % (3 directions).
+failed runs during the fit: 0 of 20 (0 %); starts redrawn: 0
 
 Named predictions
 -----------------
