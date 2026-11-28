@@ -288,6 +288,14 @@ def test_the_nuts_result(sampled, tmp_path):
     assert "target_accept=0.99" in [x for x in fake.warnings() if "divergent" in x][0]
     fig = r.plot_trace()
     assert len([a for a in fig.axes if a.get_visible()]) == 4
+    # the corner plot: 3 histograms and 3 pairs; log axes for log-scale quantities
+    fig = r.plot_corner(mark={"ka": 1.5, "CL": 0.04})
+    shown = [a for a in fig.axes if a.get_visible()]
+    assert len(fig.axes) == 9 and len(shown) == 6
+    assert shown[-1].get_xlabel() == "ke" and shown[-1].get_xscale() == "log"
+    assert r.plot_corner(["ka", "CL"], log=False).axes[0].get_xscale() == "linear"
+    with pytest.raises(ValueError, match="no quantity 'V'"):
+        r.plot_corner(["ka", "V"])
     with pytest.raises(ValueError, match="profile is for likelihood fits"):
         r.profile("ka")
     out = r.save(tmp_path / "run")
