@@ -23,6 +23,17 @@ versioning; `0.x` releases may change the API.
   from fixed starts, which can jump between branches of the likelihood.
 
 ### Fixed
+- **`method laplace` (FOCE-I) could report a −2LL too high when a unit's conditional density
+  has more than one local mode**, as with a lag time (a sampling time on either side of
+  it). Each unit's inner fit started from zero, or from the modes carried along the fit, and
+  could end in the poorer mode; the fit then reported, and optimized, a −2LL that depended
+  on the path taken. Now the inner fit is also run from fixed random starts, per unit
+  keeping the best, at the start and the end of a fit and wherever no starting modes are
+  given (`obj(x)`, the final −2LL); a fit whose end this lowers goes on from there.
+  Tutorial 5 (warfarin, lag time), one start: −2LL 689.58 → 647.62 (one subject had been in
+  the poorer mode; the estimates barely move), and the drop for sex on V is 14.5, not 56.5.
+  Theophylline, phenobarbital and myelosuppression: the same −2LL and estimates. Cost: two
+  searches per fit, each about the time of a few evaluations.
 - **The doctor checks the gradient of a `method laplace` fit.** It left laplace out ("its
   gradient is itself a difference"), which stopped being true in 0.3.0. The fit's gradient
   is now checked as for `optimize`: against central differences of -2LL at rtol / 100, with

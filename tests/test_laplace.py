@@ -360,3 +360,33 @@ def test_the_doctor_checks_a_gradient_made_of_differences(tmp_path):
     assert grad.severity == "note"
     assert grad.message.startswith("the fit's gradients (differences at fixed modes) agree")
     assert max(grad.evidence["relative differences"]) < 1e-3
+
+
+TWO = """model two
+param A=1, k=0
+d_t(e) = 1
+e(0) = 0
+observable y = sin(A) + 0.1*A*e
+"""
+
+
+def test_a_unit_with_two_modes_gets_the_better(tmp_path):
+    """sin(A) = 0.9 at A = 1.12 and at 2.02, and the second measurement picks 2.02; from
+    zero (A at its mean, 1.3) the inner fit ends at the poorer mode near 1.24. Without
+    starting modes the search finds 2.02, and -2LL is the lower one."""
+    f = tmp_path / "two.csv"
+    rows = [dict(ID=i, TIME=t, DV=0.9 + 0.1 * 2.02 * t) for i in (1, 2, 3) for t in (0.0, 1.0)]
+    pd.DataFrame(rows).to_csv(f, index=False)
+    obj = tf.objective(tf.Problem.from_text(
+        TWO + f'fit two\ndata "{f}"\nunit ID\nobserve y = DV\n'
+        "estimate A ~ normal(mean=1.3, sd=1)\nerror y ~ additive(0.05)\nmethod laplace\n"
+        "options rtol=1e-10 atol=1e-12 progress=none\n"))  # fmt: skip
+    x = np.asarray(obj.x0, float)
+    u = obj._u(x)
+    v0, Z0, _, _ = obj.evaluate(u, np.zeros((obj.n, obj.q)), gradient=False)
+    v, Z, _, _ = obj.evaluate(u, gradient=False)
+    assert np.allclose(1.3 + Z0[:, 0], 1.236, atol=0.01)  # the poorer mode, from zero
+    assert np.allclose(1.3 + Z[:, 0], 2.016, atol=0.01)
+    assert v < v0 - 2
+    assert float(obj(x)) == pytest.approx(v, abs=1e-9)
+    assert np.array_equal(obj.search(u), obj.search(u))  # a function of u
