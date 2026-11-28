@@ -402,14 +402,39 @@ def _result(problem, post, start, arr, chains, warmup, samples, status, notes, s
     )  # fmt: skip
 
 
+def _smooth(H):
+    """A 2-D histogram smoothed by the kernel (1, 2, 1) / 4 along each axis, twice."""
+    for _ in range(2):
+        for axis in (0, 1):
+            P = np.pad(H, [(1, 1) if a == axis else (0, 0) for a in (0, 1)])
+            lo = P[:-2] if axis == 0 else P[:, :-2]
+            mid = P[1:-1] if axis == 0 else P[:, 1:-1]
+            hi = P[2:] if axis == 0 else P[:, 2:]
+            H = (lo + 2 * mid + hi) / 4
+    return H
+
+
+def _mass_levels(H, masses):
+    """The heights of a 2-D histogram above which it holds each of ``masses`` (ascending
+    heights, as contour wants), or None when they do not separate."""
+    h = np.sort(H.ravel())[::-1]
+    c = np.cumsum(h)
+    if not c[-1]:
+        return None
+    c = c / c[-1]
+    levels = sorted({float(h[min(np.searchsorted(c, q), len(h) - 1)]) for q in masses})
+    levels = [v for v in levels if v > 0]
+    return levels if len(levels) == len(masses) else None
+
+
 class PosteriorResult(Result):
     """A NUTS fit: ``result.table()`` (posterior median, mean, SD, 95 % interval, R-hat,
     effective sample sizes), ``result.draws`` (every draw after warmup), ``result.corr``
     (correlations over the draws), ``result.convergence()`` (per chain), ``result.plot_trace()``
-    (each chain's path); ``individual()``, ``plot_gof()``,
-    ``plot_individual()`` and ``tables()`` at the posterior medians; ``vpc()`` with each
-    simulated study from a different draw. ``result.x`` and ``result.estimates`` are the
-    posterior medians."""
+    (each chain's path), ``result.plot_corner()`` (the posterior, each quantity and pair);
+    ``individual()``, ``plot_gof()``, ``plot_individual()`` and ``tables()`` at the posterior
+    medians; ``vpc()`` with each simulated study from a different draw. ``result.x`` and
+    ``result.estimates`` are the posterior medians."""
 
     @property
     def corr(self) -> pd.DataFrame:
@@ -494,6 +519,108 @@ class PosteriorResult(Result):
         """Each chain's path per quantity (and -2 log posterior), warmup and draws, the
         warmup's end dotted. Returns the figure."""
         return self._draw_trace()
+
+    def plot_corner(self, names=None, *, bins: int = 40, log: bool | None = None,
+                    mark: dict | None = None):  # fmt: skip
+        """The posterior as a corner plot: each quantity's draws as a histogram on the
+        diagonal; below it, each pair's draws with the contours that hold 39 % and 86 % of
+        them (1 and 2 SD of a normal in two dimensions), so skew, bounds and correlations
+        show. The posterior medians are marked; ``mark``: other values to mark, e.g. another
+        fit's ``result.estimates``. ``names``: the quantities (default: all). ``log``: axes on
+        the log scale for the quantities estimated on it (default), or never (False). Returns
+        the figure."""
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.ticker import FixedLocator, FormatStrFormatter, NullLocator
+        except ImportError:  # pragma: no cover
+            raise ImportError(
+                "plots need matplotlib: pip install matplotlib (or tenqsp-fit[plot])."
+            ) from None
+        names = list(self.names) if names is None else list(names)
+        unknown = [n for n in names if n not in self.names]
+        if unknown:
+            raise ValueError(f"plot_corner: no quantity {unknown[0]!r}; quantities: "
+                             f"{', '.join(self.names)}.")  # fmt: skip
+        k = self.draws[names].to_numpy(float)
+        if len(k) < 2:
+            raise ValueError("plot_corner: fewer than 2 draws.")
+        scale = {n: s[0] for n, s in zip(self.names, self.scales, strict=True)}
+        on_log = [log is not False and scale[n] == "log" and np.all(k[:, i] > 0)
+                  for i, n in enumerate(names)]  # fmt: skip
+        mark = mark or {}
+        m = len(names)
+        size = min(1.9 * m, 10.0)
+        fig, axes = plt.subplots(m, m, figsize=(size, size), squeeze=False)
+        fig.subplots_adjust(left=0.13, right=0.97, bottom=0.13, top=0.93, hspace=0.08,
+                            wspace=0.08)  # fmt: skip
+
+        def edges(i):
+            v = k[:, i]
+            lo, hi = np.percentile(v, [0.1, 99.9])
+            if on_log[i]:
+                return np.geomspace(lo, hi, bins + 1)
+            return np.linspace(lo, hi, bins + 1)
+
+        E = [edges(i) for i in range(m)]
+        # pairs: coarser bins (about 25 draws per filled bin), smoothed, for clean contours
+        pair_bins = int(np.clip(np.sqrt(len(k) / 4), 10, bins))
+        E2 = [np.geomspace(e[0], e[-1], pair_bins + 1) if on_log[i] else
+              np.linspace(e[0], e[-1], pair_bins + 1) for i, e in enumerate(E)]  # fmt: skip
+        # three ticks per axis, plain numbers
+        T = [np.geomspace(e[0], e[-1], 5)[1:-1] if on_log[i] else np.linspace(e[0], e[-1], 5)[1:-1]
+             for i, e in enumerate(E)]  # fmt: skip
+
+        def ticks(axis, i):
+            axis.set_major_locator(FixedLocator(T[i]))
+            axis.set_minor_locator(NullLocator())
+            axis.set_major_formatter(FormatStrFormatter("%.3g"))
+
+        med = {n: float(np.median(k[:, i])) for i, n in enumerate(names)}
+        for r in range(m):
+            for c in range(m):
+                ax = axes[r, c]
+                if c > r:
+                    ax.set_visible(False)
+                    continue
+                if r == c:
+                    ax.hist(k[:, c], bins=E[c], color="#4c72b0", alpha=0.8)
+                    ax.axvline(med[names[c]], color="black", lw=1)
+                    if names[c] in mark:
+                        ax.axvline(mark[names[c]], color="#c44e52", lw=1, ls="--")
+                    ax.set_yticks([])
+                else:
+                    x, y = k[:, c], k[:, r]
+                    ax.plot(x, y, ".", ms=1, color="#4c72b0", alpha=0.15, rasterized=True)
+                    H, xe, ye = np.histogram2d(x, y, bins=[E2[c], E2[r]])
+                    H = _smooth(H)
+                    levels = _mass_levels(H, (0.865, 0.393))
+                    if levels is not None:
+                        xc = np.sqrt(xe[:-1] * xe[1:]) if on_log[c] else 0.5 * (xe[:-1] + xe[1:])
+                        yc = np.sqrt(ye[:-1] * ye[1:]) if on_log[r] else 0.5 * (ye[:-1] + ye[1:])
+                        ax.contour(xc, yc, H.T, levels=levels, colors="black", linewidths=0.8)
+                    ax.plot(med[names[c]], med[names[r]], "o", color="black", ms=3)
+                    if names[c] in mark and names[r] in mark:
+                        ax.plot(mark[names[c]], mark[names[r]], "x", color="#c44e52", ms=6)
+                    if on_log[r]:
+                        ax.set_yscale("log")
+                    ax.set_ylim(E[r][0], E[r][-1])
+                    ticks(ax.yaxis, r)
+                if on_log[c]:
+                    ax.set_xscale("log")
+                ax.set_xlim(E[c][0], E[c][-1])
+                ticks(ax.xaxis, c)
+                ax.tick_params(labelsize=7)
+                if r == m - 1:
+                    ax.set_xlabel(names[c], fontsize=8)
+                    ax.tick_params(axis="x", labelrotation=45)
+                else:
+                    ax.tick_params(axis="x", labelbottom=False)
+                if c == 0 and r > 0:
+                    ax.set_ylabel(names[r], fontsize=8)
+                else:
+                    ax.tick_params(axis="y", labelleft=False)
+        fig.suptitle(f"{self.problem.name}: posterior ({len(k)} draws)", fontsize=9)
+        return fig
 
     def plot_waterfall(self, ax=None):
         raise ValueError("the waterfall is for multi-start fits; NUTS has chains: "

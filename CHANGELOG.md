@@ -6,6 +6,9 @@ versioning; `0.x` releases may change the API.
 ## [Unreleased]
 
 ### Added
+- **`result.plot_corner()`** after `nuts`: the posterior as a corner plot (histograms on the
+  diagonal; each pair's draws with 39 % and 86 % contours; the posterior medians and,
+  with `mark=`, other values marked; log axes for log-scale quantities).
 - **`profile(name, values=[...])`**: the profile at values you choose, each side outward from
   the estimate and every fit from its neighbour, so it follows one branch of the likelihood
   (a loop of independent fits from fixed starts can jump between branches and draw a zigzag).

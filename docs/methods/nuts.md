@@ -109,6 +109,12 @@ little about an SD, and the posterior shows the skew that a standard error canno
 
 `result.draws` holds every draw after warmup; `result.to_arviz()` gives them as ArviZ data for
 ArviZ's own plots and summaries; `result.plot_trace()` draws each chain's path.
+`result.plot_corner()` draws the posterior as a corner plot: each quantity's histogram on the
+diagonal and, below it, each pair's draws with the contours holding 39 % and 86 % of them
+(1 and 2 SD of a two-dimensional normal), so skew, bounds and correlations show. The
+posterior medians are marked; `mark=` marks other values (another fit's
+`result.estimates`, say); `names=` picks the quantities; quantities estimated on the log
+scale get log axes (`log=False` for linear ones).
 
 ## Options
 
