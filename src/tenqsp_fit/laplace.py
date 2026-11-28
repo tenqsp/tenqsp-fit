@@ -100,6 +100,16 @@ INNER_TOL = 1e-8  # the conditional modes: the largest step of a score
 INNER_MAXITER = 100  # Fisher-scoring iterations, one run of the units each
 HALVINGS = 12
 NOISE = 1e-9  # a step that raises 2g by less than this is round-off, accepted
+# A unit's conditional density can have more than one local mode (a lag time with a sampling
+# time on either side): where no starting modes are given, and at the start and the end of a
+# fit, each unit's inner fit runs from zero, from the modes in hand and from SEARCH_STARTS
+# draws of N(0, SEARCH_SD^2) scores (fixed: the value at x is a function of x), and keeps the
+# lowest 2g. A fit whose end the search lowers by more than POLISH_GAIN goes on from there.
+SEARCH_STARTS = 10
+SEARCH_SD = 2.0
+SEARCH_MAXITER = 10  # enough to tell the modes apart; the inner fit then ends from the best
+POLISH_GAIN = 1e-2
+POLISH_ROUNDS = 3
 
 
 class Laplace:
@@ -150,6 +160,10 @@ class Laplace:
         self._core_jit = lambda u, Z0, want, tol: core(
             u, Z0, want, tol=cond._tol0 if tol is None else tol
         )
+        search = jax.jit(cond._tolerant(self._search))
+        self._search_jit = lambda u, Zs, tol: search(u, Zs, tol=cond._tol0 if tol is None else tol)
+        draws = np.random.default_rng(0).standard_normal((SEARCH_STARTS, self.n, self.q))
+        self._draws = SEARCH_SD * draws
 
     # ------------------------------------------------------------------ pieces
     def _R(self, x):
@@ -197,7 +211,7 @@ class Laplace:
         return H, grad
 
     # ------------------------------------------------------------------ the inner fit
-    def _modes(self, x, Z0):
+    def _modes(self, x, Z0, maxiter=INNER_MAXITER):
         """The conditional modes at x from Z0, by Fisher scoring with step halving per unit.
         Returns the modes, ``2g`` and H at them, and the number of iterations."""
         x = jax.lax.stop_gradient(x)
@@ -241,9 +255,29 @@ class Laplace:
         d0 = step(G0, H0)
         c0 = (Z0, g0, G0, H0, jnp.ones(self.n), d0, ~jnp.isfinite(g0), 0)
         Z, g, _, H, _, _, _, it = jax.lax.while_loop(
-            lambda c: (c[7] < INNER_MAXITER) & ~jnp.all(c[6]), body, c0
+            lambda c: (c[7] < maxiter) & ~jnp.all(c[6]), body, c0
         )
         return Z, g, H, it
+
+    def _search(self, u, Zs):
+        """Per unit, where the inner fit (at most SEARCH_MAXITER iterations) gets with the
+        lowest 2g over the starts Zs (starts, units, scores), and that 2g; the starts run
+        together."""
+        x = to_x(u, self.scales)
+        Zk, gk, _, _ = jax.vmap(lambda Z0: self._modes(x, Z0, SEARCH_MAXITER))(Zs)
+        gk = jnp.where(jnp.isfinite(gk), gk, jnp.inf)
+        k = jnp.argmin(gk, axis=0)
+        return jnp.take_along_axis(Zk, k[None, :, None], axis=0)[0], jnp.min(gk, axis=0)
+
+    def search(self, u, Z=None, *, tol=None) -> np.ndarray:
+        """The conditional modes at u (the estimation scale) by a search: each unit's inner
+        fit from zero, from Z (None: zero) and from fixed random scores; per unit the lowest
+        2g. Where a unit's conditional density has more than one local mode, one start can
+        find a poor one."""
+        Z = np.zeros((self.n, self.q)) if Z is None else np.asarray(Z, float)
+        Zs = np.concatenate([np.zeros((1, self.n, self.q)), Z[None], self._draws])
+        u = jnp.asarray(u, dtype=jnp.float64)
+        return np.asarray(self._search_jit(u, jnp.asarray(Zs), tol)[0])
 
     # ------------------------------------------------------------------ the outer function
     def _FG(self, x, Z):
@@ -365,11 +399,13 @@ class Laplace:
 
     def evaluate(self, u, Z0=None, *, gradient: bool = True, tol=None):
         """-2LL at ``u`` (the estimation scale, ``self.scales``) with the modes from ``Z0``
-        (None: 0), and with ``gradient`` its gradient by u and the modes' derivative by u:
-        ``(value, Z, grad, dZ/du)`` as NumPy (grad and dZ/du None without ``gradient``).
-        ``tol``: the solver's tolerances (``Objective.tighter``; None: the problem's)."""
+        (None: from the modes ``search`` finds), and with ``gradient`` its gradient by u and
+        the modes' derivative by u: ``(value, Z, grad, dZ/du)`` as NumPy (grad and dZ/du None
+        without ``gradient``). ``tol``: the solver's tolerances (``Objective.tighter``; None:
+        the problem's)."""
         u = jnp.asarray(u, dtype=jnp.float64)
-        Z0 = jnp.zeros((self.n, self.q)) if Z0 is None else jnp.asarray(Z0, dtype=jnp.float64)
+        Z0 = self.search(u, tol=tol) if Z0 is None else Z0
+        Z0 = jnp.asarray(Z0, dtype=jnp.float64)
         v, Z, g, dz, _ = self._core_jit(u, Z0, jnp.asarray(bool(gradient)), tol)
         if not gradient:
             return float(v), np.asarray(Z), None, None
@@ -500,12 +536,13 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     evaluations = np.zeros(n, int)
     failed_at: list[np.ndarray] = []
     messages = [""] * n
+    ends: list = [None] * n  # a start's modes at its end, found by the search there
     trace: list[tuple] = []
     stop = threading.Event()
     lock = threading.Lock()  # a step's -2LL and values are shown together
 
     def run(j):
-        warm = _Warm(Z0)
+        warm = _Warm(obj.search(U_start[j]))
         first = []
 
         def fun(u):
@@ -536,6 +573,14 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
 
         try:
             r = minimize_bounded(fun, U_start[j], sc, maxiter, accepted=accepted, stop=stop)
+            for _ in range(POLISH_ROUNDS):  # a unit in a poor local mode: go on from better
+                u_end = np.asarray(r["u"], float)
+                v, Zs = value(u_end, obj.search(u_end, warm.Z))
+                if not v < r["f"] - POLISH_GAIN:
+                    ends[j] = Zs
+                    break
+                warm = _Warm(Zs)
+                r = minimize_bounded(fun, u_end, sc, maxiter, accepted=accepted, stop=stop)
         except _Stopped:
             return
         xj = np.asarray(to_x(jnp.asarray(r["u"]), sc))
@@ -551,14 +596,18 @@ def fit_laplace(problem, obj: Laplace, *, progress=None, with_se=True):
     starts_pool.shutdown()
     show(last=True, status=status)
 
-    final = np.array([float(v) for v in pool.map(obj, list(X))])
+    def last(j):  # -2LL at a start's end: from the modes searched there, else by a search
+        u = to_u(X[j], sc)
+        return float(obj.evaluate(u, ends[j], gradient=False)[0])
+
+    final = np.array(list(pool.map(last, range(n))))
     rank = final + np.array([float(pen(jnp.asarray(to_u(x, sc)))) for x in X])
     run_ = _Run(X=X, steps=steps, done=done, failed=failed, failed_at=failed_at,
                 evaluations=evaluations, trace=trace, status=status,
                 stopped_by=stopped_by)  # fmt: skip
     best = int(np.argmin(np.where(np.isfinite(rank), rank, np.inf)))
     u_best = to_u(X[best], sc)
-    _, Z, _, dz = obj.evaluate(u_best)
+    _, Z, _, dz = obj.evaluate(u_best, ends[best])
     pool.shutdown()
     if status == "stopped" or not with_se:
         cov = no_covariance(p, None if with_se else NOT_ASKED)
